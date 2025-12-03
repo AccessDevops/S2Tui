@@ -1,0 +1,83 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "S2Tui",
+  "version": "0.1.0",
+  "identifier": "com.accessdevops.s2tui",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "S2Tui",
+        "width": 120,
+        "height": 160,
+        "x": 200,
+        "y": 200,
+        "resizable": false,
+        "fullscreen": false,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "visible": true,
+        "skipTaskbar": true,
+        "shadow": false,
+        "focus": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src ipc: http://ipc.localhost https://huggingface.co https://s2tui.accessdevops.com https://*.accessdevops.com"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/256x256.png",
+      "icons/512x512.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "models/ggml-small-q5_0.bin": "models/",
+      "models/ggml-large-v3-turbo-q5_0.bin": "models/"
+    },
+    "category": "Productivity",
+    "shortDescription": "Local Speech-to-Text with Whisper",
+    "longDescription": "S2Tui is a local voice transcription application using Whisper. Your data stays on your machine.",
+    "copyright": "Copyright 2025 AccessDevOps",
+    "macOS": {
+      "entitlements": "./entitlements.plist",
+      "infoPlist": "./Info.plist",
+      "signingIdentity": null,
+      "minimumSystemVersion": "12.0",
+      "dmg": {
+        "appPosition": { "x": 180, "y": 170 },
+        "applicationFolderPosition": { "x": 480, "y": 170 },
+        "windowSize": { "width": 660, "height": 400 }
+      }
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["English", "French"],
+        "displayLanguageSelector": false
+      }
+    },
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": true
+      },
+      "deb": {
+        "depends": ["libasound2", "libssl3"]
+      }
+    }
+  }
+}
