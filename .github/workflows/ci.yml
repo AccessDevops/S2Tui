@@ -117,6 +117,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Build frontend
+        run: npm run build
+
       - name: Rust format check
         working-directory: src-tauri
         run: cargo fmt --check
