@@ -45,9 +45,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "models/*.bin"
-    ],
+    "resources": {
+      "models/*.bin": "models/"
+    },
     "category": "Productivity",
     "shortDescription": "Local Speech-to-Text with Whisper",
     "longDescription": "S2Tui is a local voice transcription application using Whisper. Your data stays on your machine.",
