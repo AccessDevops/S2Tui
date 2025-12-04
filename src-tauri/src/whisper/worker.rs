@@ -7,9 +7,7 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 
 /// Calculate optimal thread count: 75% of available CPUs, minimum 1
 fn optimal_thread_count() -> i32 {
-    let cpus = available_parallelism()
-        .map(|p| p.get())
-        .unwrap_or(4); // Fallback to 4 if detection fails
+    let cpus = available_parallelism().map(|p| p.get()).unwrap_or(4); // Fallback to 4 if detection fails
 
     let threads = ((cpus as f32) * 0.75).ceil() as i32;
     threads.max(1) // At least 1 thread
@@ -75,9 +73,9 @@ impl WhisperEngine {
         tracing::info!("Loading Whisper model: {}", model_path.display());
 
         let ctx = WhisperContext::new_with_params(
-            model_path.to_str().ok_or_else(|| {
-                WhisperError::LoadError("Invalid model path".to_string())
-            })?,
+            model_path
+                .to_str()
+                .ok_or_else(|| WhisperError::LoadError("Invalid model path".to_string()))?,
             WhisperContextParameters::default(),
         )
         .map_err(|e| WhisperError::LoadError(e.to_string()))?;

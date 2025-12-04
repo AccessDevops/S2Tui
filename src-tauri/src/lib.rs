@@ -8,7 +8,6 @@ mod whisper;
 use tauri::{Emitter, Manager, WebviewWindow};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-
 pub use commands::*;
 pub use state::AppState;
 
@@ -60,8 +59,8 @@ pub fn run() {
 /// Configure window to not steal focus when clicked (macOS only)
 #[cfg(target_os = "macos")]
 fn configure_non_focusable_window(window: &WebviewWindow) {
-    use objc2::runtime::AnyObject;
     use objc2::msg_send;
+    use objc2::runtime::AnyObject;
 
     // Get the NSWindow handle
     if let Ok(ns_window) = window.ns_window() {
@@ -86,9 +85,9 @@ fn setup_global_shortcut(app: &tauri::AppHandle) -> Result<(), Box<dyn std::erro
 
     // Try different shortcuts in order of preference
     let shortcuts = [
-        "CommandOrControl+Shift+Space",   // Primary: Cmd+Shift+Space
-        "CommandOrControl+Alt+Space",     // Fallback 1
-        "CommandOrControl+Shift+S",       // Fallback 2
+        "CommandOrControl+Shift+Space", // Primary: Cmd+Shift+Space
+        "CommandOrControl+Alt+Space",   // Fallback 1
+        "CommandOrControl+Shift+S",     // Fallback 2
     ];
 
     for shortcut_str in shortcuts {
@@ -101,14 +100,16 @@ fn setup_global_shortcut(app: &tauri::AppHandle) -> Result<(), Box<dyn std::erro
         };
 
         // on_shortcut both registers the shortcut AND sets the handler
-        match app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
-            if event.state == ShortcutState::Pressed {
-                tracing::info!("Global shortcut triggered");
-                if let Err(e) = _app.emit("shortcut:triggered", ()) {
-                    tracing::error!("Failed to emit shortcut event: {}", e);
+        match app
+            .global_shortcut()
+            .on_shortcut(shortcut, move |_app, _shortcut, event| {
+                if event.state == ShortcutState::Pressed {
+                    tracing::info!("Global shortcut triggered");
+                    if let Err(e) = _app.emit("shortcut:triggered", ()) {
+                        tracing::error!("Failed to emit shortcut event: {}", e);
+                    }
                 }
-            }
-        }) {
+            }) {
             Ok(_) => {
                 tracing::info!("Global shortcut registered: {}", shortcut_str);
                 return Ok(());

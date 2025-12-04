@@ -64,9 +64,7 @@ pub struct Permissions {
 
 impl Default for Permissions {
     fn default() -> Self {
-        Self {
-            microphone: false,
-        }
+        Self { microphone: false }
     }
 }
 

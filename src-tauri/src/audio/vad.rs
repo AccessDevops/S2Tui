@@ -32,7 +32,7 @@ pub struct VoiceActivityDetector {
 impl VoiceActivityDetector {
     pub fn new() -> Self {
         Self {
-            speech_threshold: 0.02, // Adjust based on testing
+            speech_threshold: 0.02,       // Adjust based on testing
             silence_frames_threshold: 15, // ~1.5 seconds at 10fps
             silence_frames: 0,
             in_speech: false,

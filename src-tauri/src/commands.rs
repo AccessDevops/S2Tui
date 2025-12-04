@@ -98,7 +98,11 @@ pub async fn stop_listen(state: State<'_, AppState>, app: AppHandle) -> Result<S
 
     let samples_count = samples.len();
     let duration = samples_count as f32 / 16000.0;
-    tracing::info!("Captured {:.2}s of audio ({} samples)", duration, samples_count);
+    tracing::info!(
+        "Captured {:.2}s of audio ({} samples)",
+        duration,
+        samples_count
+    );
 
     // Check minimum duration
     if duration < 0.5 {
@@ -111,12 +115,10 @@ pub async fn stop_listen(state: State<'_, AppState>, app: AppHandle) -> Result<S
     // Transcribe with Whisper
     let whisper = state.whisper.clone();
     let transcribe_start = std::time::Instant::now();
-    let transcription = tokio::task::spawn_blocking(move || {
-        whisper.transcribe(&samples)
-    })
-    .await
-    .map_err(|e| format!("Task join error: {}", e))?
-    .map_err(|e| e.to_string())?;
+    let transcription = tokio::task::spawn_blocking(move || whisper.transcribe(&samples))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+        .map_err(|e| e.to_string())?;
     let transcribe_duration_ms = transcribe_start.elapsed().as_millis() as u64;
 
     // Get current model from settings
@@ -157,7 +159,10 @@ pub async fn load_whisper_model(
     let model_path = models_dir.join(&filename);
 
     if !model_path.exists() {
-        return Err(format!("Model not found: {}. Please download it first.", filename));
+        return Err(format!(
+            "Model not found: {}. Please download it first.",
+            filename
+        ));
     }
 
     // Load model in a blocking task
@@ -265,17 +270,14 @@ fn check_microphone_permission() -> bool {
 /// On macOS, this triggers the native permission dialog
 /// Returns true if permission was granted
 #[tauri::command]
-pub async fn request_microphone_permission(
-    state: State<'_, AppState>,
-) -> Result<bool, String> {
+pub async fn request_microphone_permission(state: State<'_, AppState>) -> Result<bool, String> {
     tracing::info!("Requesting microphone permission");
 
     // Run in blocking task since it waits for user response
-    let granted = tokio::task::spawn_blocking(|| {
-        crate::permissions::request_microphone_permission()
-    })
-    .await
-    .map_err(|e| format!("Task join error: {}", e))?;
+    let granted =
+        tokio::task::spawn_blocking(|| crate::permissions::request_microphone_permission())
+            .await
+            .map_err(|e| format!("Task join error: {}", e))?;
 
     // Update permissions state
     if granted {
@@ -288,7 +290,11 @@ pub async fn request_microphone_permission(
 
 /// Update the global shortcut
 #[tauri::command]
-pub fn set_shortcut(shortcut: String, app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+pub fn set_shortcut(
+    shortcut: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
     tracing::info!("Setting new shortcut: {}", shortcut);
