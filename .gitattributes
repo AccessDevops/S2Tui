@@ -1,1 +1,0 @@
-src-tauri/models/*.bin filter=lfs diff=lfs merge=lfs -text

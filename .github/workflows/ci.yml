@@ -35,8 +35,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          lfs: true
+
+      - name: Download Whisper models
+        shell: bash
+        run: |
+          mkdir -p src-tauri/models
+          curl -L -o src-tauri/models/ggml-small-q5_0.bin \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_0.bin"
+          curl -L -o src-tauri/models/ggml-large-v3-turbo-q5_0.bin \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -86,8 +93,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          lfs: true
+
+      - name: Download Whisper models
+        run: |
+          mkdir -p src-tauri/models
+          curl -L -o src-tauri/models/ggml-small-q5_0.bin \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_0.bin"
+          curl -L -o src-tauri/models/ggml-large-v3-turbo-q5_0.bin \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

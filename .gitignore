@@ -10,7 +10,8 @@ src-tauri/target/
 src-tauri/WixTools/
 src-tauri/gen/
 
-# Whisper models are tracked via Git LFS (see .gitattributes)
+# Whisper models (downloaded from Hugging Face during CI/build)
+src-tauri/models/*.bin
 
 # Logs
 logs/
