@@ -13,9 +13,10 @@ pub enum AppStatus {
     Error,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Language {
+    #[default]
     Auto,
     En,
     Fr,
@@ -30,12 +31,6 @@ pub enum Language {
     Ar,
     Hi,
     Pl,
-}
-
-impl Default for Language {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,15 +52,9 @@ impl Default for Settings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Permissions {
     pub microphone: bool,
-}
-
-impl Default for Permissions {
-    fn default() -> Self {
-        Self { microphone: false }
-    }
 }
 
 pub struct AppStateInner {

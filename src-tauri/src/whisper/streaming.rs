@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::collections::VecDeque;
 
 /// Audio streamer for sending audio chunks to the Whisper worker

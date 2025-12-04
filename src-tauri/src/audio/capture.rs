@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream};
 use parking_lot::Mutex;

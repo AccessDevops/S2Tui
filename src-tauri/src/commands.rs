@@ -274,10 +274,9 @@ pub async fn request_microphone_permission(state: State<'_, AppState>) -> Result
     tracing::info!("Requesting microphone permission");
 
     // Run in blocking task since it waits for user response
-    let granted =
-        tokio::task::spawn_blocking(|| crate::permissions::request_microphone_permission())
-            .await
-            .map_err(|e| format!("Task join error: {}", e))?;
+    let granted = tokio::task::spawn_blocking(crate::permissions::request_microphone_permission)
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?;
 
     // Update permissions state
     if granted {

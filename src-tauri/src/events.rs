@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use serde::Serialize;
 
 /// Event payload for VAD level updates

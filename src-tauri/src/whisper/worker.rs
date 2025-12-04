@@ -93,6 +93,7 @@ impl WhisperEngine {
     }
 
     /// Set whether to translate to English
+    #[allow(dead_code)]
     pub fn set_translate(&mut self, translate: bool) {
         self.config.translate = translate;
     }
