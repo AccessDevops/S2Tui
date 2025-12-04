@@ -98,6 +98,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -133,24 +135,6 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
-
-      - name: Download Whisper models
-        shell: bash
-        run: |
-          mkdir -p src-tauri/models
-
-          # Download small model (bundled)
-          echo "Downloading ggml-small-q5_0.bin..."
-          curl -L --retry 3 --retry-delay 5 -o src-tauri/models/ggml-small-q5_0.bin \
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_0.bin"
-
-          # Download large-v3-turbo model (bundled)
-          echo "Downloading ggml-large-v3-turbo-q5_0.bin..."
-          curl -L --retry 3 --retry-delay 5 -o src-tauri/models/ggml-large-v3-turbo-q5_0.bin \
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
-
-          # Verify downloads
-          ls -lh src-tauri/models/
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0

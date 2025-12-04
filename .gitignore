@@ -10,8 +10,7 @@ src-tauri/target/
 src-tauri/WixTools/
 src-tauri/gen/
 
-# Whisper models (too large for git)
-src-tauri/models/*.bin
+# Whisper models are tracked via Git LFS (see .gitattributes)
 
 # Logs
 logs/
