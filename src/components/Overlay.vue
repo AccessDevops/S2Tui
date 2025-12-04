@@ -2,7 +2,6 @@
 import { computed } from "vue";
 import { WebviewWindow, getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import MicButton from "./MicButton.vue";
-import PermissionGuide from "./PermissionGuide.vue";
 import { useAppStore } from "../stores/appStore";
 
 const store = useAppStore();
@@ -95,7 +94,4 @@ async function openSettings() {
       </Transition>
     </div>
   </div>
-
-  <!-- Permission Guide Modal -->
-  <PermissionGuide />
 </template>

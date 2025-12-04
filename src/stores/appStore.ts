@@ -97,9 +97,37 @@ export const useAppStore = defineStore("app", () => {
     showSettings.value = !showSettings.value;
   }
 
-  function openPermissionGuide(type: "microphone") {
+  async function openPermissionGuide(type: "microphone") {
     permissionType.value = type;
-    showPermissionGuide.value = true;
+    // Open a dedicated permission window instead of inline modal
+    const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+
+    // Check if permission window already exists
+    const existingWindow = await WebviewWindow.getByLabel("permissions");
+    if (existingWindow) {
+      await existingWindow.setFocus();
+      return;
+    }
+
+    // Create new permission window
+    const permWindow = new WebviewWindow("permissions", {
+      url: `/permissions.html?type=${type}`,
+      title: "Permissions - S2Tui",
+      width: 480,
+      height: 420,
+      minWidth: 400,
+      minHeight: 350,
+      resizable: false,
+      center: true,
+      decorations: false,
+      transparent: false,
+      shadow: true,
+      alwaysOnTop: true,
+    });
+
+    permWindow.once("tauri://error", (e) => {
+      console.error("Failed to create permissions window:", e);
+    });
   }
 
   function closePermissionGuide() {
