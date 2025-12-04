@@ -4,7 +4,8 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, State};
+#[allow(unused_imports)]
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::mpsc;
 
 /// Get the models directory path
