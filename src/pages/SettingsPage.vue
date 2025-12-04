@@ -444,8 +444,8 @@ async function closeWindow() {
 
           <div class="p-4 bg-white/5 rounded-xl border border-white/10">
             <p class="text-white/50 text-sm">
-              <strong class="text-white/70">Note:</strong> Permissions are managed by macOS.
-              Open <strong>System Preferences → Security & Privacy → Privacy</strong> to modify them.
+              <strong class="text-white/70">Note:</strong> To modify microphone access, open
+              <strong>System Settings → Privacy & Security → Microphone</strong>.
             </p>
           </div>
         </div>
