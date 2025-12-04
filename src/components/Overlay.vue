@@ -44,8 +44,10 @@ async function openSettings() {
 
 <template>
   <div class="fixed inset-0 flex items-center justify-center pointer-events-none">
+    <!-- Windows fix: minimal alpha background on clickable area to receive events on transparent windows -->
     <div
-      class="relative pointer-events-auto cursor-move"
+      class="relative pointer-events-auto cursor-move p-4 -m-4 rounded-full"
+      style="background: rgba(0,0,0,0.01)"
       @mousedown="startDrag"
     >
       <!-- Mic Button -->
