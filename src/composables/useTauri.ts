@@ -260,6 +260,16 @@ export function useTauri() {
       }
     }));
 
+    // Permission granted event (from permission window)
+    unlistenFns.push(await listen<{ type: string }>("permission:granted", (event) => {
+      console.log("[permission:granted] Received:", event.payload);
+      if (event.payload.type === "microphone") {
+        store.setPermissions({ microphone: true });
+        // Reset status to idle so user can try again
+        store.setStatus("idle");
+      }
+    }));
+
     // Model loaded event
     unlistenFns.push(await listen<string>("model:loaded", (event) => {
       store.updateSettings({ model: event.payload as ModelId });

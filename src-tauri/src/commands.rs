@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 
 /// Get the models directory path
 /// In dev mode: uses src-tauri/models/ in the project directory
-/// In release mode: uses app_data_dir/models/
+/// In release mode: uses the bundled resources directory
 fn get_models_dir(_app: &AppHandle) -> Result<PathBuf, String> {
     #[cfg(debug_assertions)]
     {
@@ -25,9 +25,9 @@ fn get_models_dir(_app: &AppHandle) -> Result<PathBuf, String> {
     }
     #[cfg(not(debug_assertions))]
     {
-        // Release mode: use app data directory
+        // Release mode: use bundled resources directory
         _app.path()
-            .app_data_dir()
+            .resource_dir()
             .map(|p| p.join("models"))
             .map_err(|e| e.to_string())
     }

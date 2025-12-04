@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 const permissionType = ref<"microphone" | "accessibility">("microphone");
@@ -33,6 +34,8 @@ async function requestPermission() {
 
     if (granted) {
       isGranted.value = true;
+      // Notify main window that permission was granted
+      await emit("permission:granted", { type: permissionType.value });
       // Close window after a short delay
       setTimeout(async () => {
         await getCurrentWebviewWindow().close();
@@ -64,6 +67,8 @@ async function checkPermission() {
     const perms = await invoke<{ microphone: boolean }>("check_permissions");
     if (permissionType.value === "microphone" && perms.microphone) {
       isGranted.value = true;
+      // Notify main window that permission was granted
+      await emit("permission:granted", { type: permissionType.value });
       // Close window after a short delay
       setTimeout(async () => {
         await getCurrentWebviewWindow().close();
@@ -115,7 +120,13 @@ async function startDrag(event: MouseEvent) {
           </svg>
         </div>
         <h2 class="text-2xl font-bold text-white mb-2">Permission Granted!</h2>
-        <p class="text-white/60">You can now use S2Tui for speech recognition.</p>
+        <p class="text-white/60 mb-6">You can now use S2Tui for speech recognition.</p>
+        <button
+          @click="closeWindow"
+          class="px-8 py-3 bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white rounded-xl font-medium transition-all shadow-lg shadow-green-500/25"
+        >
+          Close
+        </button>
       </div>
 
       <!-- Denied State - Manual instructions -->

@@ -45,10 +45,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": {
-      "models/ggml-small-q5_0.bin": "models/",
-      "models/ggml-large-v3-turbo-q5_0.bin": "models/"
-    },
+    "resources": [
+      "models/*.bin"
+    ],
     "category": "Productivity",
     "shortDescription": "Local Speech-to-Text with Whisper",
     "longDescription": "S2Tui is a local voice transcription application using Whisper. Your data stays on your machine.",
