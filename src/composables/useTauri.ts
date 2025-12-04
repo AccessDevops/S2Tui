@@ -35,9 +35,17 @@ export function useTauri() {
 
   async function stopListen() {
     try {
+      // Set processing status immediately - this is controlled by frontend
+      // to ensure it stays blue for the entire transcription duration
+      store.setStatus("processing");
+
+      // Wait for transcription to complete (this blocks until Whisper is done)
       await invoke("stop_listen");
+
+      // Transcription complete - status will be set to idle by transcript:final handler
     } catch (error) {
       console.error("Failed to stop listening:", error);
+      store.setStatus("idle");
     }
   }
 
@@ -190,36 +198,17 @@ export function useTauri() {
     listenersInitialized = true;
     console.log("[initListeners] Initializing listeners...");
 
-    // Track when processing started to ensure minimum display time
-    let processingStartTime = 0;
-    let isProcessing = false;
-    const MIN_PROCESSING_DISPLAY_MS = 800; // Minimum time to show processing state
-
     // Audio events
     unlistenFns.push(await listen<VadLevelPayload>("vad:level", (event) => {
       store.setVuLevel(event.payload.rms);
     }));
 
-    unlistenFns.push(await listen<string>("state:change", async (event) => {
+    // State changes from backend - only handle "listening" state here
+    // "processing" is set by stopListen(), "idle" is set by transcript:final handler
+    unlistenFns.push(await listen<string>("state:change", (event) => {
       const newStatus = event.payload as any;
-
-      // When entering processing state, record the time
-      if (newStatus === "processing") {
-        processingStartTime = Date.now();
-        isProcessing = true;
-        store.setStatus(newStatus);
-      }
-      // When leaving processing state, ensure minimum display time
-      else if (newStatus === "idle" && isProcessing) {
-        const elapsed = Date.now() - processingStartTime;
-        const remaining = MIN_PROCESSING_DISPLAY_MS - elapsed;
-        if (remaining > 0) {
-          await new Promise(resolve => setTimeout(resolve, remaining));
-        }
-        isProcessing = false;
-        store.setStatus(newStatus);
-      }
-      else {
+      // Only update status for listening state - processing/idle are handled elsewhere
+      if (newStatus === "listening") {
         store.setStatus(newStatus);
       }
     }));
@@ -231,6 +220,10 @@ export function useTauri() {
     unlistenFns.push(await listen<TranscriptPayload>("transcript:final", async (event) => {
       const { text, model, transcribeDurationMs } = event.payload;
       store.setLastTranscript(text);
+
+      // Transcription complete - set status to idle
+      store.setStatus("idle");
+
       // Add to history (in-memory and persisted)
       if (text.trim()) {
         store.addToHistory(text, model as any, transcribeDurationMs);

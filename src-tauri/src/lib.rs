@@ -144,8 +144,7 @@ fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>>
 
     // Load tray icon from embedded bytes
     let icon_bytes = include_bytes!("../icons/32x32.png");
-    let icon = Image::from_bytes(icon_bytes)
-        .expect("Failed to load tray icon");
+    let icon = Image::from_bytes(icon_bytes).expect("Failed to load tray icon");
 
     // Build and store the tray icon
     let _tray = TrayIconBuilder::new()
