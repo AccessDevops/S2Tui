@@ -96,7 +96,6 @@ fn configure_windows_overlay(window: &WebviewWindow) -> Result<(), String> {
     unsafe {
         // Win32 API constants
         const GWL_EXSTYLE: i32 = -20;
-        const WS_EX_NOACTIVATE: u32 = 0x08000000; // Window does not become foreground when clicked
         const WS_EX_TOOLWINDOW: u32 = 0x00000080; // Tool window, hidden from Alt+Tab
         const WS_EX_TOPMOST: u32 = 0x00000008; // Always on top
 
