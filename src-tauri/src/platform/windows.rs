@@ -111,7 +111,7 @@ fn configure_windows_overlay(window: &WebviewWindow) -> Result<(), String> {
         let current_ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
 
         // Add our desired styles
-        let new_ex_style = current_ex_style | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
+        let new_ex_style = current_ex_style | WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
 
         // Apply new extended styles
         let result = SetWindowLongW(hwnd, GWL_EXSTYLE, new_ex_style as i32);
@@ -121,7 +121,7 @@ fn configure_windows_overlay(window: &WebviewWindow) -> Result<(), String> {
             tracing::warn!("Windows: SetWindowLongW returned 0, style may not have changed");
         }
 
-        tracing::info!("Windows: Extended styles configured (NOACTIVATE | TOOLWINDOW | TOPMOST)");
+        tracing::info!("Windows: Extended styles configured (TOOLWINDOW | TOPMOST)");
     }
 
     Ok(())

@@ -1,7 +1,52 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useAppStore, type ModelId, type Language } from "../stores/appStore";
 import { loadSettings, saveSettings, addHistoryEntry, loadHistory } from "./useStore";
+
+// Platform-aware settings window opener
+export async function openSettings() {
+  // Check if settings window already exists
+  const existingWindow = await WebviewWindow.getByLabel("settings");
+  if (existingWindow) {
+    await existingWindow.setFocus();
+    return;
+  }
+
+  // Detect platform for platform-specific options
+  let platform = "unknown";
+  try {
+    const os = await import("@tauri-apps/plugin-os");
+    platform = os.platform();
+  } catch (e) {
+    console.warn("Could not detect platform:", e);
+  }
+
+  // Build window options based on platform
+  const isMacOS = platform === "macos";
+
+  console.log(`Creating settings window for platform: ${platform}`);
+
+  const settingsWindow = new WebviewWindow("settings", {
+    url: "settings.html",
+    title: "Settings - S2Tui",
+    width: 700,
+    height: 550,
+    minWidth: 600,
+    minHeight: 450,
+    resizable: true,
+    center: true,
+    transparent: false,
+    shadow: true,
+    // Platform-specific: macOS uses overlay titlebar, others use standard decorations
+    decorations: !isMacOS,
+    ...(isMacOS ? { titleBarStyle: "overlay" as const } : {}),
+  });
+
+  settingsWindow.once("tauri://error", (e) => {
+    console.error("Failed to create settings window:", e);
+  });
+}
 
 type ListenMode = "toggle" | "push-to-talk" | "voice-activated";
 
@@ -265,6 +310,12 @@ export function useTauri() {
     // Model loaded event
     unlistenFns.push(await listen<string>("model:loaded", (event) => {
       store.updateSettings({ model: event.payload as ModelId });
+    }));
+
+    // Open settings event (from tray menu)
+    unlistenFns.push(await listen("open:settings", () => {
+      console.log("[open:settings] Opening settings window from tray menu");
+      openSettings();
     }));
 
     // Global shortcut listener - with guard to prevent duplicate actions

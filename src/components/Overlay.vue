@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { WebviewWindow, getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import MicButton from "./MicButton.vue";
 import { useAppStore } from "../stores/appStore";
+import { openSettings } from "../composables/useTauri";
 
 const store = useAppStore();
 const showCopyNotification = computed(() => store.showCopyNotification);
@@ -10,35 +11,6 @@ const showCopyNotification = computed(() => store.showCopyNotification);
 async function startDrag(event: MouseEvent) {
   if (event.button !== 0) return;
   await getCurrentWebviewWindow().startDragging();
-}
-
-async function openSettings() {
-  // Check if settings window already exists
-  const existingWindow = await WebviewWindow.getByLabel("settings");
-  if (existingWindow) {
-    await existingWindow.setFocus();
-    return;
-  }
-
-  // Create new settings window
-  const settingsWindow = new WebviewWindow("settings", {
-    url: "/settings.html",
-    title: "Settings - S2Tui",
-    width: 700,
-    height: 550,
-    minWidth: 600,
-    minHeight: 450,
-    resizable: true,
-    center: true,
-    decorations: false,
-    transparent: false,
-    shadow: true,
-    titleBarStyle: "overlay",
-  });
-
-  settingsWindow.once("tauri://error", (e) => {
-    console.error("Failed to create settings window:", e);
-  });
 }
 </script>
 
