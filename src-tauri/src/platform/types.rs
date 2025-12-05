@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 pub enum PlatformError {
     #[error("Permission denied: {0}")]
     PermissionDenied(String),

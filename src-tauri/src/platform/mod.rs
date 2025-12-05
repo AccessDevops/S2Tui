@@ -60,7 +60,6 @@ pub fn get_platform() -> Box<dyn PlatformIntegration> {
 }
 
 /// Convenience functions for use in commands
-
 pub fn is_microphone_authorized() -> bool {
     get_platform().check_microphone_permission().is_granted()
 }

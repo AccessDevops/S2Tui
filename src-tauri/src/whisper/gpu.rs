@@ -43,6 +43,7 @@ impl GpuBackend {
 }
 
 /// Detect the active GPU backend based on compilation features
+#[allow(unreachable_code)]
 pub fn detect_active_backend() -> GpuBackend {
     // Check for enabled GPU features in order of preference
 
@@ -153,6 +154,7 @@ fn is_cuda_available() -> bool {
 }
 
 #[cfg(not(feature = "gpu-cuda"))]
+#[allow(dead_code)]
 fn is_cuda_available() -> bool {
     false
 }
@@ -192,6 +194,7 @@ fn is_hipblas_available() -> bool {
 }
 
 #[cfg(not(feature = "gpu-hipblas"))]
+#[allow(dead_code)]
 fn is_hipblas_available() -> bool {
     false
 }
@@ -243,6 +246,7 @@ fn is_vulkan_available() -> bool {
 }
 
 #[cfg(not(feature = "gpu-vulkan"))]
+#[allow(dead_code)]
 fn is_vulkan_available() -> bool {
     false
 }
