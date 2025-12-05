@@ -1,13 +1,5 @@
 fn main() {
-    // Configure Windows icon for the executable
-    #[cfg(windows)]
-    {
-        let mut res = tauri_winres::WindowsResource::new();
-        res.set_icon("icons/icon.ico");
-        if let Err(e) = res.compile() {
-            eprintln!("Warning: Failed to compile Windows resources: {}", e);
-        }
-    }
-
+    // Tauri automatically handles Windows resources (icon, version info)
+    // from tauri.conf.json bundle.icon configuration
     tauri_build::build()
 }
