@@ -61,7 +61,7 @@ impl PlatformIntegration for MacOSPlatform {
         // Get the NSWindow handle
         let ns_window = window
             .ns_window()
-            .map_err(|e| PlatformError::WindowHandleUnavailable)?;
+            .map_err(|_| PlatformError::WindowHandleUnavailable)?;
 
         let ns_window = ns_window as *mut AnyObject;
 
@@ -70,9 +70,75 @@ impl PlatformIntegration for MacOSPlatform {
             // NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorStationary | NSWindowCollectionBehaviorIgnoresCycle
             let behavior: u64 = (1 << 0) | (1 << 4) | (1 << 6);
             let _: () = msg_send![ns_window, setCollectionBehavior: behavior];
+
+            // Configure window transparency
+            // Make window non-opaque to allow transparency
+            let _: () = msg_send![ns_window, setOpaque: Bool::NO];
+
+            // Set window background to clear color
+            let clear_color: *mut AnyObject = msg_send![objc2::class!(NSColor), clearColor];
+            let _: () = msg_send![ns_window, setBackgroundColor: clear_color];
+
+            // Get content view and configure transparency
+            let content_view: *mut AnyObject = msg_send![ns_window, contentView];
+            if !content_view.is_null() {
+                // Make content view layer-backed with transparent background
+                let _: () = msg_send![content_view, setWantsLayer: Bool::YES];
+
+                // Get the layer and set clear background
+                let layer: *mut AnyObject = msg_send![content_view, layer];
+                if !layer.is_null() {
+                    // CGColorGetConstantColor(kCGColorClear) - using nil for clear
+                    let _: () = msg_send![layer, setBackgroundColor: std::ptr::null::<AnyObject>()];
+                }
+
+                // Recursively configure all subviews for transparency (including WKWebView)
+                configure_subviews_transparent(content_view);
+            }
         }
 
-        tracing::info!("Window configured as non-focusable overlay");
+        tracing::info!("Window configured as non-focusable overlay with transparency");
         Ok(())
+    }
+}
+
+/// Recursively configure subviews for transparency
+/// This ensures the WKWebView and all intermediate views are transparent
+unsafe fn configure_subviews_transparent(view: *mut AnyObject) {
+    if view.is_null() {
+        return;
+    }
+
+    // Get class name to check if it's a WKWebView
+    let class: *mut AnyObject = msg_send![view, class];
+    let class_name: *mut AnyObject = msg_send![class, className];
+    let class_name_str: *const std::ffi::c_char = msg_send![class_name, UTF8String];
+
+    if !class_name_str.is_null() {
+        let name = std::ffi::CStr::from_ptr(class_name_str)
+            .to_string_lossy()
+            .to_string();
+
+        // Configure WKWebView specifically
+        if name.contains("WKWebView") {
+            // Try to set _drawsBackground to NO (private API but commonly used)
+            let _: () = msg_send![view, setValue: Bool::NO, forKey: objc2_foundation::ns_string!("drawsBackground")];
+            tracing::debug!("Configured WKWebView transparency");
+        }
+    }
+
+    // Make view layer-backed
+    let _: () = msg_send![view, setWantsLayer: Bool::YES];
+
+    // Get subviews array
+    let subviews: *mut AnyObject = msg_send![view, subviews];
+    if subviews.is_null() {
+        return;
+    }
+
+    let count: usize = msg_send![subviews, count];
+    for i in 0..count {
+        let subview: *mut AnyObject = msg_send![subviews, objectAtIndex: i];
+        configure_subviews_transparent(subview);
     }
 }

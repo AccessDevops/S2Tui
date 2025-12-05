@@ -16,20 +16,48 @@ fn get_models_dir(_app: &AppHandle) -> Result<PathBuf, String> {
     {
         // Dev mode: use local models folder
         let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
+        tracing::debug!("Executable path: {}", exe_path.display());
         let project_root = exe_path
             .parent() // target/debug
             .and_then(|p| p.parent()) // target
             .and_then(|p| p.parent()) // src-tauri
             .ok_or("Could not find project root")?;
-        Ok(project_root.join("models"))
+        let models_dir = project_root.join("models");
+        tracing::info!("[DEV] Models directory: {}", models_dir.display());
+        Ok(models_dir)
     }
     #[cfg(not(debug_assertions))]
     {
         // Release mode: use bundled resources directory
-        _app.path()
-            .resource_dir()
-            .map(|p| p.join("models"))
-            .map_err(|e| e.to_string())
+        let resource_dir = _app.path().resource_dir().map_err(|e| e.to_string())?;
+        tracing::info!("[RELEASE] Resource directory: {}", resource_dir.display());
+        let models_dir = resource_dir.join("models");
+        tracing::info!("[RELEASE] Models directory: {}", models_dir.display());
+
+        // Debug: list contents of resource dir
+        if let Ok(entries) = std::fs::read_dir(&resource_dir) {
+            tracing::info!("[RELEASE] Contents of resource_dir:");
+            for entry in entries.flatten() {
+                tracing::info!("  - {}", entry.path().display());
+            }
+        }
+
+        // Debug: list contents of models dir if it exists
+        if models_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&models_dir) {
+                tracing::info!("[RELEASE] Contents of models_dir:");
+                for entry in entries.flatten() {
+                    tracing::info!("  - {}", entry.path().display());
+                }
+            }
+        } else {
+            tracing::warn!(
+                "[RELEASE] Models directory does not exist: {}",
+                models_dir.display()
+            );
+        }
+
+        Ok(models_dir)
     }
 }
 
@@ -147,24 +175,28 @@ pub async fn stop_listen(state: State<'_, AppState>, app: AppHandle) -> Result<S
 #[tauri::command]
 pub async fn load_whisper_model(
     model: String,
-    quant: String,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
-    tracing::info!("Loading Whisper model: {} ({})", model, quant);
+    tracing::info!("Loading Whisper model: {}", model);
 
-    let filename = format!("ggml-{}-{}.bin", model, quant);
+    // Simplified naming: ggml-{model}.bin (no quantization in filename)
+    let filename = format!("ggml-{}.bin", model);
     let models_dir = get_models_dir(&app)?;
-    tracing::info!("Models directory: {}", models_dir.display());
 
     let model_path = models_dir.join(&filename);
+    tracing::info!("Looking for model at: {}", model_path.display());
 
     if !model_path.exists() {
+        tracing::error!("Model file not found: {}", model_path.display());
         return Err(format!(
-            "Model not found: {}. Please download it first.",
-            filename
+            "Model not found: {}. Expected at: {}",
+            filename,
+            model_path.display()
         ));
     }
+
+    tracing::info!("Model file found, loading...");
 
     // Load model in a blocking task
     let whisper = state.whisper.clone();
@@ -176,13 +208,12 @@ pub async fn load_whisper_model(
     // Update settings
     state.update_settings(|s| {
         s.model = model.clone();
-        s.quantization = quant.clone();
     });
 
     app.emit("model:loaded", &model)
         .map_err(|e| e.to_string())?;
 
-    tracing::info!("Whisper model loaded successfully");
+    tracing::info!("Whisper model loaded successfully: {}", model);
     Ok(())
 }
 
@@ -218,11 +249,10 @@ async fn process_audio_chunks(
 
 // Settings commands
 #[tauri::command]
-pub fn set_model(name: String, quant: String, state: State<'_, AppState>) -> Result<(), String> {
-    tracing::info!("Setting model: {} ({})", name, quant);
+pub fn set_model(name: String, state: State<'_, AppState>) -> Result<(), String> {
+    tracing::info!("Setting model: {}", name);
     state.update_settings(|s| {
         s.model = name;
-        s.quantization = quant;
     });
     Ok(())
 }
@@ -334,26 +364,47 @@ pub fn set_shortcut(
     Ok(())
 }
 
-/// Get list of available models on disk (bundled models only)
+/// Get list of available models on disk
+/// Dynamically scans for ggml-*.bin files and extracts model names
 #[tauri::command]
 pub fn get_available_models(app: AppHandle) -> Result<Vec<String>, String> {
     let models_dir = get_models_dir(&app)?;
-    tracing::info!("Checking models in: {}", models_dir.display());
+    tracing::info!("Scanning for models in: {}", models_dir.display());
 
     let mut available = Vec::new();
 
-    // Only check bundled models: small and large-v3-turbo
-    let model_ids = ["small", "large-v3-turbo"];
+    // Check if models directory exists
+    if !models_dir.exists() {
+        tracing::warn!("Models directory does not exist: {}", models_dir.display());
+        return Ok(available);
+    }
 
-    for model_id in model_ids {
-        let filename = format!("ggml-{}-q5_0.bin", model_id);
-        let path = models_dir.join(&filename);
-        if path.exists() {
-            tracing::info!("Found model: {}", model_id);
-            available.push(model_id.to_string());
+    // Scan directory for ggml-*.bin files
+    match std::fs::read_dir(&models_dir) {
+        Ok(entries) => {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                    // Match pattern: ggml-{model_id}.bin
+                    if filename.starts_with("ggml-") && filename.ends_with(".bin") {
+                        // Extract model_id: remove "ggml-" prefix and ".bin" suffix
+                        let model_id = &filename[5..filename.len() - 4];
+                        tracing::info!("Found model: {} (file: {})", model_id, filename);
+                        available.push(model_id.to_string());
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!("Failed to read models directory: {}", e);
+            return Err(format!("Failed to read models directory: {}", e));
         }
     }
 
+    // Sort for consistent ordering
+    available.sort();
+
+    tracing::info!("Available models: {:?}", available);
     Ok(available)
 }
 

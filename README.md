@@ -49,10 +49,10 @@ sudo dpkg -i S2Tui_*.deb
 # Install dependencies
 npm install
 
-# Download Whisper model
+# Download Whisper model (simplified naming without quantization suffix)
 mkdir -p src-tauri/models
-curl -L -o src-tauri/models/ggml-small-q5_0.bin \
-  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_0.bin
+curl -L -o src-tauri/models/ggml-small.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin
 
 # Run
 npm run tauri dev

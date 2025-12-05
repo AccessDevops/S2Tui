@@ -37,7 +37,6 @@ pub enum Language {
 pub struct Settings {
     pub language: Language,
     pub model: String,
-    pub quantization: String,
     pub shortcut: String,
 }
 
@@ -46,7 +45,6 @@ impl Default for Settings {
         Self {
             language: Language::Auto,
             model: "large-v3-turbo".to_string(),
-            quantization: "q5_0".to_string(),
             shortcut: "CommandOrControl+Shift+Space".to_string(),
         }
     }

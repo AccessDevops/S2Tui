@@ -80,11 +80,16 @@ Settings are stored at:
 
 ## Whisper Models
 
-Models are stored in `src-tauri/models/` with naming convention `ggml-{model}-{quantization}.bin`:
-- Default model: `large-v3-turbo` with `q5_0` quantization
-- Available: base, small, medium, large-v3-turbo, large-v3
+Models are stored in `src-tauri/models/` with naming convention `ggml-{model}.bin`:
+- Default model: `large-v3-turbo`
+- Available: small, large-v3-turbo
 
-Download models from: https://huggingface.co/ggerganov/whisper.cpp/tree/main
+Models are downloaded from Hugging Face during CI/CD and bundled with the application. For local development, download the quantized versions and rename them:
+```bash
+# Example for small model
+curl -L -o src-tauri/models/ggml-small.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin
+```
 
 ## macOS Requirements
 

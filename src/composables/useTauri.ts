@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { useAppStore, type ModelId, type Language, type Quantization } from "../stores/appStore";
+import { useAppStore, type ModelId, type Language } from "../stores/appStore";
 import { loadSettings, saveSettings, addHistoryEntry, loadHistory } from "./useStore";
 
 type ListenMode = "toggle" | "push-to-talk" | "voice-activated";
@@ -50,9 +50,9 @@ export function useTauri() {
   }
 
   // Commands - Settings
-  async function setModel(name: ModelId, quant: string) {
+  async function setModel(name: ModelId) {
     try {
-      await invoke("set_model", { name, quant });
+      await invoke("set_model", { name });
     } catch (error) {
       console.error("Failed to set model:", error);
     }
@@ -78,13 +78,13 @@ export function useTauri() {
   }
 
   // Commands - Model Management
-  async function loadWhisperModel(model: ModelId, quant: Quantization) {
+  async function loadWhisperModel(model: ModelId) {
     try {
-      console.log("Loading whisper model:", model, "with quant:", quant);
-      await invoke("load_whisper_model", { model, quant });
-      store.updateSettings({ model, quantization: quant });
-      await saveSettings({ model, quantization: quant });
-      console.log("Model saved to settings:", model, quant);
+      console.log("Loading whisper model:", model);
+      await invoke("load_whisper_model", { model });
+      store.updateSettings({ model });
+      await saveSettings({ model });
+      console.log("Model saved to settings:", model);
     } catch (error) {
       console.error("Failed to load whisper model:", error);
       throw error;
@@ -148,7 +148,6 @@ export function useTauri() {
       store.updateSettings({
         language: persisted.language,
         model: persisted.model,
-        quantization: persisted.quantization,
         autoCopy: persisted.autoCopy,
         shortcut: persisted.shortcut,
       });
@@ -174,8 +173,8 @@ export function useTauri() {
       // Load the whisper model if available
       if (availableModels.includes(persisted.model)) {
         try {
-          console.log("Loading persisted model:", persisted.model, "with quant:", persisted.quantization);
-          await loadWhisperModel(persisted.model, persisted.quantization);
+          console.log("Loading persisted model:", persisted.model);
+          await loadWhisperModel(persisted.model);
           console.log("Whisper model loaded successfully:", persisted.model);
         } catch (error) {
           console.warn("Could not load whisper model:", error);

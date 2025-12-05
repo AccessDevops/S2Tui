@@ -12,7 +12,6 @@ export interface PersistedSettings extends Settings {
 const defaultSettings: PersistedSettings = {
   language: "auto",
   model: "large-v3-turbo",
-  quantization: "q5_0",
   autoCopy: true,
   shortcut: "CommandOrControl+Shift+Space",
   history: [],

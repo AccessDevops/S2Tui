@@ -56,7 +56,7 @@ async function openSettings() {
       <!-- Settings Button - bottom center -->
       <button
         @click="openSettings"
-        class="absolute z-20 w-6 h-6 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center text-white/70 hover:text-white transition-all bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2"
+        class="absolute z-20 w-6 h-6 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center text-white/70 hover:text-white transition-all bottom-1 left-1/2 -translate-x-1/2"
         title="Settings"
       >
         <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
@@ -73,18 +73,18 @@ async function openSettings() {
         </svg>
       </button>
 
-      <!-- Copy Notification Popover (below mic button) -->
+      <!-- Copy Notification Popover (centered on mic button) -->
       <Transition
         enter-active-class="transition-all duration-300 ease-out"
-        enter-from-class="opacity-0 translate-y-2 scale-95"
-        enter-to-class="opacity-100 translate-y-0 scale-100"
+        enter-from-class="opacity-0 scale-75"
+        enter-to-class="opacity-100 scale-100"
         leave-active-class="transition-all duration-200 ease-in"
-        leave-from-class="opacity-100 translate-y-0 scale-100"
-        leave-to-class="opacity-0 translate-y-2 scale-95"
+        leave-from-class="opacity-100 scale-100"
+        leave-to-class="opacity-0 scale-75"
       >
         <div
           v-if="showCopyNotification"
-          class="absolute top-full mt-2 left-1/2 -translate-x-1/2 z-30 whitespace-nowrap"
+          class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 whitespace-nowrap"
         >
           <div class="flex items-center gap-1.5 px-2 py-1.5 rounded-md bg-green-500/90 text-white text-xs font-medium shadow-lg backdrop-blur-sm">
             <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">

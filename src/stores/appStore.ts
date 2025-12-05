@@ -3,7 +3,6 @@ import { ref, computed } from "vue";
 
 export type AppStatus = "idle" | "listening" | "processing" | "error";
 export type ModelId = "small" | "large-v3-turbo";
-export type Quantization = "q5_0" | "q5_1" | "q8_0";
 export type Language = "auto" | "en" | "fr" | "es" | "de" | "it" | "pt" | "nl" | "ja" | "zh" | "ko" | "ar" | "hi" | "pl";
 
 export interface ModelInfo {
@@ -14,13 +13,11 @@ export interface ModelInfo {
   downloading: boolean;
   progress: number;
   bundled: boolean;
-  availableQuants: Quantization[];  // Available quantizations on HuggingFace
 }
 
 export interface Settings {
   language: Language;
   model: ModelId;
-  quantization: Quantization;
   autoCopy: boolean;
   shortcut: string;
 }
@@ -51,7 +48,6 @@ export const useAppStore = defineStore("app", () => {
   const settings = ref<Settings>({
     language: "auto",
     model: "large-v3-turbo",
-    quantization: "q5_0",
     autoCopy: true,
     shortcut: "CommandOrControl+Shift+Space",
   });
@@ -62,8 +58,8 @@ export const useAppStore = defineStore("app", () => {
 
   // Bundled models only
   const models = ref<ModelInfo[]>([
-    { id: "small", name: "Small (Fast)", size: "190 MB", downloaded: true, downloading: false, progress: 100, bundled: true, availableQuants: ["q5_0"] },
-    { id: "large-v3-turbo", name: "Large V3 Turbo (Best)", size: "547 MB", downloaded: true, downloading: false, progress: 100, bundled: true, availableQuants: ["q5_0"] },
+    { id: "small", name: "Small (Fast)", size: "190 MB", downloaded: true, downloading: false, progress: 100, bundled: true },
+    { id: "large-v3-turbo", name: "Large V3 Turbo (Best)", size: "547 MB", downloaded: true, downloading: false, progress: 100, bundled: true },
   ]);
 
   const history = ref<HistoryEntry[]>([]);
@@ -196,23 +192,6 @@ export const useAppStore = defineStore("app", () => {
     }, 2000);
   }
 
-  // Get the best available quantization for a model
-  // Prefers q5_0 > q5_1 > q8_0 (smaller = faster)
-  function getBestQuantForModel(modelId: ModelId): Quantization {
-    const model = models.value.find((m) => m.id === modelId);
-    if (!model || model.availableQuants.length === 0) {
-      return "q5_0"; // fallback
-    }
-    // Prefer q5_0 if available, then q5_1, then q8_0
-    const preference: Quantization[] = ["q5_0", "q5_1", "q8_0"];
-    for (const quant of preference) {
-      if (model.availableQuants.includes(quant)) {
-        return quant;
-      }
-    }
-    return model.availableQuants[0];
-  }
-
   return {
     // State
     status,
@@ -249,6 +228,5 @@ export const useAppStore = defineStore("app", () => {
     clearHistory,
     removeFromHistory,
     triggerCopyNotification,
-    getBestQuantForModel,
   };
 });

@@ -121,9 +121,7 @@ async function handleSelectModel(modelId: ModelId) {
   if (model && model.downloaded) {
     loadingModelId.value = modelId;
     try {
-      // Use the best available quantization for this specific model
-      const quant = store.getBestQuantForModel(modelId);
-      await loadWhisperModel(modelId, quant);
+      await loadWhisperModel(modelId);
     } catch (error) {
       console.error("Failed to load model:", error);
     } finally {

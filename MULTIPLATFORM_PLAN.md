@@ -74,11 +74,12 @@ MODELS_DIR="src-tauri/models"
 mkdir -p "$MODELS_DIR"
 
 # Modèle small (recommandé pour démarrer)
-curl -L -o "$MODELS_DIR/ggml-small-q5_0.bin" \
-  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en-q5_0.bin"
+# Note: On télécharge la version quantifiée mais on la renomme sans le suffixe
+curl -L -o "$MODELS_DIR/ggml-small.bin" \
+  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin"
 
 # Modèle large-v3-turbo (meilleure qualité)
-curl -L -o "$MODELS_DIR/ggml-large-v3-turbo-q5_0.bin" \
+curl -L -o "$MODELS_DIR/ggml-large-v3-turbo.bin" \
   "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
 ```
 
@@ -176,8 +177,8 @@ npm run tauri dev
 
 | Action | Fichier | Description |
 |--------|---------|-------------|
-| ✅ | `.github/workflows/ci.yml` | URL modèle small corrigée (`q5_1`) |
-| ✅ | `.github/workflows/release.yml` | URL modèle small corrigée (`q5_1`) |
+| ✅ | `.github/workflows/ci.yml` | Nommage simplifié (`ggml-{model}.bin`) |
+| ✅ | `.github/workflows/release.yml` | Nommage simplifié (`ggml-{model}.bin`) |
 
 ### ✅ Déjà fait
 
