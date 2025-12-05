@@ -148,6 +148,7 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CI: true  # Required for macOS DMG bundling in headless CI environment
           # macOS signing - only set if secrets are configured
           # To enable: add APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, etc. to repository secrets
           # Windows updater signing - only set if secrets are configured
