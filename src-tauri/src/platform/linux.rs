@@ -31,7 +31,12 @@ impl PlatformIntegration for LinuxPlatform {
             }
 
             // Check if we can access at least one capture device
-            for entry in fs::read_dir("/dev/snd").ok().into_iter().flatten().flatten() {
+            for entry in fs::read_dir("/dev/snd")
+                .ok()
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
                 let path = entry.path();
                 let name = entry.file_name();
                 let name_str = name.to_string_lossy();

@@ -33,6 +33,10 @@ cpal = "0.15"
 # Random for mock/testing
 rand = "0.8"
 
+# Windows: raw-window-handle for overlay configuration
+[target.'cfg(target_os = "windows")'.dependencies]
+raw-window-handle = "0.6"
+
 # Whisper.cpp bindings (base, CPU-only by default)
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 whisper-rs = { version = "0.13", default-features = false }

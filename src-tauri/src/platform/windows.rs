@@ -81,7 +81,7 @@ impl PlatformIntegration for WindowsPlatform {
 /// Uses raw HWND manipulation via raw-window-handle
 #[cfg(target_os = "windows")]
 fn configure_windows_overlay(window: &WebviewWindow) -> Result<(), String> {
-    use tauri::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     // Get the window handle
     let window_handle = window
@@ -134,7 +134,7 @@ fn configure_windows_overlay(_window: &WebviewWindow) -> Result<(), String> {
 
 /// Check if audio input devices are available using cpal
 fn check_audio_devices_available() -> Result<bool, String> {
-    use cpal::traits::{DeviceTrait, HostTrait};
+    use cpal::traits::HostTrait;
 
     let host = cpal::default_host();
 
