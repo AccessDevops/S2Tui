@@ -40,8 +40,9 @@ jobs:
         shell: bash
         run: |
           mkdir -p src-tauri/models
+          # Note: ggml-small-q5_0 n'existe pas, on télécharge q5_1 et renomme
           curl -L -o src-tauri/models/ggml-small-q5_0.bin \
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_0.bin"
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin"
           curl -L -o src-tauri/models/ggml-large-v3-turbo-q5_0.bin \
             "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
 
@@ -97,8 +98,9 @@ jobs:
       - name: Download Whisper models
         run: |
           mkdir -p src-tauri/models
+          # Note: ggml-small-q5_0 n'existe pas, on télécharge q5_1 et renomme
           curl -L -o src-tauri/models/ggml-small-q5_0.bin \
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_0.bin"
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin"
           curl -L -o src-tauri/models/ggml-large-v3-turbo-q5_0.bin \
             "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
 

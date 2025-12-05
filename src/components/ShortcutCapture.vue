@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
+import { platform } from "@tauri-apps/plugin-os";
 
 const props = defineProps<{
   modelValue: string;
@@ -13,6 +14,16 @@ const emit = defineEmits<{
 const isCapturing = ref(false);
 const capturedKeys = ref<Set<string>>(new Set());
 const error = ref<string | null>(null);
+const isMac = ref(false);
+
+onMounted(async () => {
+  try {
+    const os = await platform();
+    isMac.value = os === "macos";
+  } catch {
+    isMac.value = false;
+  }
+});
 
 // Standard shortcuts that should not be used (common OS and app shortcuts)
 const FORBIDDEN_SHORTCUTS = new Set([
@@ -40,13 +51,25 @@ const FORBIDDEN_SHORTCUTS = new Set([
 
 // Format shortcut for display (convert to readable format)
 function formatShortcut(shortcut: string): string {
-  return shortcut
-    .replace("CommandOrControl", "⌘")
-    .replace("Meta", "⌘")
-    .replace("Control", "Ctrl")
-    .replace("Shift", "⇧")
-    .replace("Alt", "⌥")
-    .replace(/\+/g, " + ");
+  if (isMac.value) {
+    // macOS: use symbols
+    return shortcut
+      .replace("CommandOrControl", "⌘")
+      .replace("Meta", "⌘")
+      .replace("Control", "⌃")
+      .replace("Shift", "⇧")
+      .replace("Alt", "⌥")
+      .replace(/\+/g, " + ");
+  } else {
+    // Windows/Linux: use text
+    return shortcut
+      .replace("CommandOrControl", "Ctrl")
+      .replace("Meta", "Ctrl")
+      .replace("Control", "Ctrl")
+      .replace("Shift", "Shift")
+      .replace("Alt", "Alt")
+      .replace(/\+/g, " + ");
+  }
 }
 
 // Convert key event to shortcut string
@@ -186,7 +209,7 @@ onUnmounted(() => {
 
     <!-- Help text -->
     <p class="text-white/40 text-xs">
-      Use a combination like ⌘ + ⇧ + a key. System shortcuts are forbidden.
+      Use a combination like {{ isMac ? '⌘ + ⇧' : 'Ctrl + Shift' }} + a key. System shortcuts are forbidden.
     </p>
   </div>
 </template>

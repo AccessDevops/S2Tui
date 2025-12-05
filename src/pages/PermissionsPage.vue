@@ -1,16 +1,25 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, onMounted, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { platform } from "@tauri-apps/plugin-os";
 
 const permissionType = ref<"microphone" | "accessibility">("microphone");
 const isGranted = ref(false);
 const isRequesting = ref(false);
 const wasDenied = ref(false);
+const currentPlatform = ref<string>("macos");
 
 // Get permission type from URL params and auto-request permission
 onMounted(async () => {
+  // Detect platform
+  try {
+    currentPlatform.value = await platform();
+  } catch (e) {
+    console.error("Failed to detect platform:", e);
+  }
+
   const params = new URLSearchParams(window.location.search);
   const type = params.get("type");
   if (type === "accessibility") {
@@ -18,12 +27,29 @@ onMounted(async () => {
   }
 
   // Automatically request permission on mount
-  // This will trigger the native macOS dialog if not yet determined
+  // This will trigger the native permission dialog if not yet determined
   await requestPermission();
 });
 
-const title = ref("Microphone access required");
-const description = ref("S2Tui needs access to your microphone for speech recognition.");
+const title = computed(() => {
+  if (currentPlatform.value === "windows") {
+    return "Microphone access required";
+  } else if (currentPlatform.value === "linux") {
+    return "Microphone access";
+  } else {
+    return "Microphone access required";
+  }
+});
+
+const description = computed(() => {
+  if (currentPlatform.value === "windows") {
+    return "S2Tui needs microphone permissions to be enabled in Windows Settings.";
+  } else if (currentPlatform.value === "linux") {
+    return "S2Tui needs access to your audio devices for speech recognition.";
+  } else {
+    return "S2Tui needs access to your microphone for speech recognition.";
+  }
+});
 
 async function requestPermission() {
   isRequesting.value = true;
@@ -53,13 +79,48 @@ async function requestPermission() {
 }
 
 async function openSystemPreferences() {
-  // Open System Preferences to Privacy settings
-  if (permissionType.value === "microphone") {
-    window.open("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone");
-  } else {
-    window.open("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
+  // Open system settings specific to each platform
+  if (currentPlatform.value === "macos") {
+    if (permissionType.value === "microphone") {
+      window.open("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone");
+    } else {
+      window.open("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
+    }
+  } else if (currentPlatform.value === "windows") {
+    // Windows: The backend will open ms-settings:privacy-microphone via request_microphone_permission
+    // So we just call it again
+    await requestPermission();
+  } else if (currentPlatform.value === "linux") {
+    // Linux: Show instructions in console/logs
+    console.log("Linux: Please check audio device permissions");
+    console.log("Run: groups | grep audio");
+    console.log("Run: arecord -l");
   }
 }
+
+// Computed property for platform-specific instructions
+const platformInstructions = computed(() => {
+  if (currentPlatform.value === "windows") {
+    return [
+      "Open Settings > Privacy & security > Microphone",
+      "Enable 'Microphone access' and 'Let apps access your microphone'",
+      "Ensure S2Tui is in the allowed apps list"
+    ];
+  } else if (currentPlatform.value === "linux") {
+    return [
+      "Ensure your user is in the 'audio' group: groups | grep audio",
+      "Check audio devices exist: ls -l /dev/snd/",
+      "Verify capture devices: arecord -l"
+    ];
+  } else {
+    // macOS
+    return [
+      "Click 'Open System Settings' below",
+      "Find and enable S2Tui in the list",
+      "Click 'Check' to verify access"
+    ];
+  }
+});
 
 async function checkPermission() {
   isRequesting.value = true;
@@ -155,17 +216,15 @@ async function startDrag(event: MouseEvent) {
             {{ wasDenied ? 'Enable access manually' : 'Steps to follow' }}
           </p>
           <ol class="space-y-3">
-            <li class="flex items-start gap-3 text-white/80">
-              <span class="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center text-sm font-medium flex-shrink-0 mt-0.5">1</span>
-              <span class="text-sm leading-relaxed">Click "Open System Settings" below</span>
-            </li>
-            <li class="flex items-start gap-3 text-white/80">
-              <span class="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center text-sm font-medium flex-shrink-0 mt-0.5">2</span>
-              <span class="text-sm leading-relaxed">Find and enable <strong>S2Tui</strong> in the list</span>
-            </li>
-            <li class="flex items-start gap-3 text-white/80">
-              <span class="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center text-sm font-medium flex-shrink-0 mt-0.5">3</span>
-              <span class="text-sm leading-relaxed">Click "Check" to verify access</span>
+            <li
+              v-for="(instruction, index) in platformInstructions"
+              :key="index"
+              class="flex items-start gap-3 text-white/80"
+            >
+              <span class="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center text-sm font-medium flex-shrink-0 mt-0.5">
+                {{ index + 1 }}
+              </span>
+              <span class="text-sm leading-relaxed" v-html="instruction"></span>
             </li>
           </ol>
         </div>

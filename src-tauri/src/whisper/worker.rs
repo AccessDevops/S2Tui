@@ -6,6 +6,7 @@ use thiserror::Error;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 /// Calculate optimal thread count: 75% of available CPUs, minimum 1
+/// Leaves headroom for UI responsiveness and system tasks
 fn optimal_thread_count() -> i32 {
     let cpus = available_parallelism().map(|p| p.get()).unwrap_or(4); // Fallback to 4 if detection fails
 
@@ -70,7 +71,13 @@ impl WhisperEngine {
             ));
         }
 
-        tracing::info!("Loading Whisper model: {}", model_path.display());
+        // Detect and log GPU backend before loading
+        let gpu_backend = crate::whisper::detect_active_backend();
+        tracing::info!(
+            "Loading Whisper model with {} backend: {}",
+            gpu_backend.name(),
+            model_path.display()
+        );
 
         let ctx = WhisperContext::new_with_params(
             model_path
@@ -83,7 +90,10 @@ impl WhisperEngine {
         self.context = Some(ctx);
         self.config.model_path = model_path;
 
-        tracing::info!("Whisper model loaded successfully");
+        tracing::info!(
+            "Whisper model loaded successfully with {} acceleration",
+            gpu_backend.name()
+        );
         Ok(())
     }
 

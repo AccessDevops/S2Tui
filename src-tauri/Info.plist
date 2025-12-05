@@ -4,8 +4,6 @@
 <dict>
     <key>NSMicrophoneUsageDescription</key>
     <string>S2Tui utilise le microphone pour transcrire votre voix en texte.</string>
-    <key>NSAppleEventsUsageDescription</key>
-    <string>S2Tui utilise l'automatisation pour insérer le texte transcrit dans l'application active.</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSHighResolutionCapable</key>

@@ -264,7 +264,7 @@ pub fn check_permissions(state: State<'_, AppState>) -> Permissions {
 
 /// Check if microphone permission is granted
 fn check_microphone_permission() -> bool {
-    crate::permissions::is_microphone_authorized()
+    crate::platform::is_microphone_authorized()
 }
 
 /// Request microphone permission from the system
@@ -275,7 +275,7 @@ pub async fn request_microphone_permission(state: State<'_, AppState>) -> Result
     tracing::info!("Requesting microphone permission");
 
     // Run in blocking task since it waits for user response
-    let granted = tokio::task::spawn_blocking(crate::permissions::request_microphone_permission)
+    let granted = tokio::task::spawn_blocking(crate::platform::request_microphone_permission)
         .await
         .map_err(|e| format!("Task join error: {}", e))?;
 
@@ -355,4 +355,10 @@ pub fn get_available_models(app: AppHandle) -> Result<Vec<String>, String> {
     }
 
     Ok(available)
+}
+
+/// Get GPU backend information
+#[tauri::command]
+pub fn get_gpu_info() -> crate::whisper::GpuInfo {
+    crate::whisper::GpuInfo::detect()
 }

@@ -1,7 +1,7 @@
 mod audio;
 mod commands;
 mod events;
-mod permissions;
+mod platform;
 mod state;
 mod whisper;
 
@@ -9,7 +9,7 @@ use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, Manager, WebviewWindow,
+    Emitter, Manager,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -29,6 +29,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_os::init())
         .setup(|app| {
             // Initialize app state
             let state = AppState::new();
@@ -37,9 +38,11 @@ pub fn run() {
             // Setup global shortcut
             setup_global_shortcut(app.handle())?;
 
-            // Configure window as non-focusable on macOS
+            // Configure overlay window with platform-specific behavior
             if let Some(window) = app.get_webview_window("main") {
-                configure_non_focusable_window(&window);
+                if let Err(e) = platform::get_platform().configure_overlay_window(&window) {
+                    tracing::warn!("Failed to configure overlay window: {}", e);
+                }
             }
 
             // Setup system tray
@@ -59,34 +62,13 @@ pub fn run() {
             commands::check_permissions,
             commands::request_microphone_permission,
             commands::get_available_models,
+            commands::get_gpu_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
 
-/// Configure window to not steal focus when clicked (macOS only)
-#[cfg(target_os = "macos")]
-fn configure_non_focusable_window(window: &WebviewWindow) {
-    use objc2::msg_send;
-    use objc2::runtime::AnyObject;
-
-    // Get the NSWindow handle
-    if let Ok(ns_window) = window.ns_window() {
-        let ns_window = ns_window as *mut AnyObject;
-        unsafe {
-            // Set the window to be a non-activating panel
-            // NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorStationary | NSWindowCollectionBehaviorIgnoresCycle
-            let behavior: u64 = (1 << 0) | (1 << 4) | (1 << 6);
-            let _: () = msg_send![ns_window, setCollectionBehavior: behavior];
-        }
-    }
-    tracing::info!("Window configured as non-focusable");
-}
-
-#[cfg(not(target_os = "macos"))]
-fn configure_non_focusable_window(_window: &WebviewWindow) {
-    // Non-macOS platforms: no special configuration needed
-}
+// Window configuration is now handled by the platform module
 
 fn setup_global_shortcut(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
