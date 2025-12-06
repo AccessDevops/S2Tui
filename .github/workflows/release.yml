@@ -47,8 +47,8 @@ jobs:
             |----------|-----------|----------|
             | **macOS (Apple Silicon)** | `.dmg` | - |
             | **macOS (Intel)** | `.dmg` | - |
-            | **Windows** | `.exe` (NSIS) | `.zip` |
-            | **Linux** | `.AppImage`, `.deb` | - |
+            | **Windows** | `.exe` (NSIS), `.msi` | `.zip` (portable) |
+            | **Linux** | `.AppImage`, `.deb`, `.rpm` | - |
 
             ## Installation Notes
 
@@ -58,12 +58,14 @@ jobs:
             - First launch: Right-click → Open (to bypass Gatekeeper)
 
             ### Windows
-            - Download the `.exe` installer or portable `.zip`
-            - Run the installer or extract the zip
+            - **NSIS Installer**: Download `*-setup.exe` and run
+            - **MSI Installer**: Download `*.msi` and run (preferred for enterprise)
+            - **Portable**: Download `*_portable.zip`, extract and run (no installation)
 
             ### Linux
             - **AppImage**: Make executable with `chmod +x` and run
-            - **Debian/Ubuntu**: Install with `sudo dpkg -i S2Tui_*.deb`
+            - **Debian/Ubuntu**: Install with `sudo dpkg -i s2tui_*.deb`
+            - **Fedora/RHEL/CentOS**: Install with `sudo rpm -ivh s2tui-*.rpm`
           draft: true
           prerelease: false
         env:
@@ -87,11 +89,11 @@ jobs:
           - name: Windows
             os: windows-latest
             target: x86_64-pc-windows-msvc
-            bundles: nsis
+            bundles: nsis,msi
           - name: Linux
             os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            bundles: appimage,deb
+            bundles: appimage,deb,rpm
 
     runs-on: ${{ matrix.platform.os }}
 
@@ -139,7 +141,8 @@ jobs:
             libssl-dev \
             libgtk-3-dev \
             libsoup-3.0-dev \
-            libjavascriptcoregtk-4.1-dev
+            libjavascriptcoregtk-4.1-dev \
+            rpm
 
       - name: Install frontend dependencies
         run: npm ci

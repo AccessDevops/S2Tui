@@ -72,6 +72,9 @@
         "installMode": "currentUser",
         "languages": ["English", "French"],
         "displayLanguageSelector": false
+      },
+      "wix": {
+        "language": ["en-US", "fr-FR"]
       }
     },
     "linux": {
@@ -80,6 +83,11 @@
       },
       "deb": {
         "depends": ["libasound2", "libssl3"]
+      },
+      "rpm": {
+        "depends": ["alsa-lib", "openssl"],
+        "epoch": 0,
+        "release": "1"
       }
     }
   }
