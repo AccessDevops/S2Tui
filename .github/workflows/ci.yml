@@ -79,7 +79,8 @@ jobs:
             rpm \
             libvulkan-dev \
             vulkan-tools \
-            glslang-tools
+            glslang-tools \
+            libshaderc-dev
 
       - name: Install Windows dependencies
         if: matrix.platform.os == 'windows-latest'
@@ -162,7 +163,9 @@ jobs:
             libjavascriptcoregtk-4.1-dev \
             rpm \
             libvulkan-dev \
-            vulkan-tools
+            vulkan-tools \
+            glslang-tools \
+            libshaderc-dev
 
       - name: Install frontend dependencies
         run: npm ci

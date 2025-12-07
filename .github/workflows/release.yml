@@ -145,7 +145,8 @@ jobs:
             rpm \
             libvulkan-dev \
             vulkan-tools \
-            glslang-tools
+            glslang-tools \
+            libshaderc-dev
 
       - name: Install Windows dependencies
         if: matrix.platform.os == 'windows-latest'
