@@ -144,7 +144,7 @@ jobs:
             libjavascriptcoregtk-4.1-dev \
             rpm \
             wget \
-            libvulkan1 \
+            libvulkan-dev \
             libxcb-shm0
 
           # Download and install Vulkan SDK (includes glslc compiler required by whisper-rs)
