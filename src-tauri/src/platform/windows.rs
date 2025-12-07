@@ -89,7 +89,7 @@ fn configure_windows_overlay(window: &WebviewWindow) -> Result<(), String> {
         .map_err(|e| format!("Failed to get window handle: {}", e))?;
 
     let hwnd = match window_handle.as_ref() {
-        RawWindowHandle::Win32(handle) => handle.hwnd.get() as isize,
+        RawWindowHandle::Win32(handle) => handle.hwnd.get(),
         _ => return Err("Not a Win32 window".to_string()),
     };
 
@@ -98,25 +98,39 @@ fn configure_windows_overlay(window: &WebviewWindow) -> Result<(), String> {
         const GWL_EXSTYLE: i32 = -20;
         const WS_EX_TOOLWINDOW: u32 = 0x00000080; // Tool window, hidden from Alt+Tab
         const WS_EX_TOPMOST: u32 = 0x00000008; // Always on top
+        const WS_EX_NOACTIVATE: u32 = 0x08000000; // Don't activate when clicked
+        const WS_EX_LAYERED: u32 = 0x00080000; // Layered window (for transparency)
+        const LWA_ALPHA: u32 = 0x00000002; // Use bAlpha for transparency
 
         // External Win32 functions
         #[link(name = "user32")]
         extern "system" {
             fn GetWindowLongW(hwnd: isize, index: i32) -> i32;
             fn SetWindowLongW(hwnd: isize, index: i32, new_long: i32) -> i32;
+            fn SetLayeredWindowAttributes(hwnd: isize, crKey: u32, bAlpha: u8, dwFlags: u32)
+                -> i32;
         }
 
         // Get current extended styles
         let current_ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
 
-        // Add our desired styles
-        let new_ex_style = current_ex_style | WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
+        // If WS_EX_LAYERED is present, configure it to receive mouse events
+        if current_ex_style & WS_EX_LAYERED != 0 {
+            // Set layered attributes: 255 = fully opaque, LWA_ALPHA = use alpha channel
+            // This is REQUIRED for WS_EX_LAYERED windows to receive mouse events
+            let lwa_result = SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+            if lwa_result == 0 {
+                tracing::warn!("Windows: SetLayeredWindowAttributes failed");
+            }
+        }
+
+        // Remove WS_EX_NOACTIVATE (which can block events), add TOOLWINDOW and TOPMOST
+        let new_ex_style =
+            (current_ex_style & !WS_EX_NOACTIVATE) | WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
 
         // Apply new extended styles
         let result = SetWindowLongW(hwnd, GWL_EXSTYLE, new_ex_style as i32);
-
         if result == 0 {
-            // Check if it actually failed (GetLastError would be non-zero)
             tracing::warn!("Windows: SetWindowLongW returned 0, style may not have changed");
         }
 
@@ -158,7 +172,7 @@ fn open_windows_microphone_settings() -> Result<(), String> {
 
     // Windows 10/11: ms-settings:privacy-microphone opens the microphone privacy page
     match Command::new("cmd")
-        .args(&["/C", "start", "ms-settings:privacy-microphone"])
+        .args(["/C", "start", "ms-settings:privacy-microphone"])
         .spawn()
     {
         Ok(_) => {

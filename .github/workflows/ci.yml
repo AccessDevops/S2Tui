@@ -80,6 +80,36 @@ jobs:
             libvulkan-dev \
             vulkan-tools
 
+      - name: Install Windows dependencies
+        if: matrix.platform.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          Write-Host "Installing Vulkan SDK..."
+          choco install vulkan-sdk -y --no-progress
+
+          Write-Host "Installing CMake and Ninja..."
+          choco install cmake ninja -y --no-progress
+
+          # Refresh environment variables
+          $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+
+          # Verify Vulkan SDK installation
+          if (Test-Path "$env:VULKAN_SDK") {
+            Write-Host "✅ VULKAN_SDK found at: $env:VULKAN_SDK"
+          } else {
+            # Try common installation paths
+            $vulkanPath = "C:\VulkanSDK"
+            if (Test-Path $vulkanPath) {
+              $latestVersion = Get-ChildItem $vulkanPath | Sort-Object Name -Descending | Select-Object -First 1
+              $env:VULKAN_SDK = $latestVersion.FullName
+              Write-Host "✅ VULKAN_SDK set to: $env:VULKAN_SDK"
+              echo "VULKAN_SDK=$env:VULKAN_SDK" >> $env:GITHUB_ENV
+            } else {
+              Write-Host "❌ VULKAN_SDK not found!"
+              exit 1
+            }
+          }
+
       - name: Install frontend dependencies
         run: npm ci
 

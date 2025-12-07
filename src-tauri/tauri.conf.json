@@ -70,11 +70,11 @@
     "windows": {
       "nsis": {
         "installMode": "currentUser",
-        "languages": ["English", "French"],
+        "languages": ["English"],
         "displayLanguageSelector": false
       },
       "wix": {
-        "language": ["en-US", "fr-FR"]
+        "language": "en-US"
       }
     },
     "linux": {

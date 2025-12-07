@@ -6,12 +6,15 @@ import { loadSettings, saveSettings, addHistoryEntry, loadHistory } from "./useS
 
 // Platform-aware settings window opener
 export async function openSettings() {
+  console.log("[openSettings] Function called!");
   // Check if settings window already exists
   const existingWindow = await WebviewWindow.getByLabel("settings");
   if (existingWindow) {
+    console.log("[openSettings] Settings window already exists, focusing...");
     await existingWindow.setFocus();
     return;
   }
+  console.log("[openSettings] Creating new settings window...");
 
   // Detect platform for platform-specific options
   let platform = "unknown";

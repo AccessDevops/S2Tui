@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useAppStore } from "../stores/appStore";
 import { useTauri } from "../composables/useTauri";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import VuMeter from "./VuMeter.vue";
 
 const store = useAppStore();
@@ -28,11 +28,12 @@ const statusColor = computed(() => {
 const isListening = computed(() => status.value === "listening");
 
 async function handleClick() {
-  // Don't process click if we just finished a drag
+  // Don't trigger click if we just finished dragging
   if (isDragging.value) {
     isDragging.value = false;
     return;
   }
+
   if (status.value === "listening") {
     await stopListen();
   } else if (status.value === "idle") {
@@ -40,37 +41,50 @@ async function handleClick() {
   }
 }
 
-function handleRightClick(e: MouseEvent) {
-  e.preventDefault();
-  store.toggleSettings();
-}
-
-async function handleMouseDown(event: MouseEvent) {
+function handleMouseDown(event: MouseEvent) {
+  // Only handle left click
   if (event.button !== 0) return;
 
   const startX = event.clientX;
   const startY = event.clientY;
+  let hasMoved = false;
 
-  const onMouseMove = async (e: MouseEvent) => {
+  const onMouseMove = (e: MouseEvent) => {
     const dx = Math.abs(e.clientX - startX);
     const dy = Math.abs(e.clientY - startY);
 
-    // If movement exceeds 5px, it's a drag
-    if (dx > 5 || dy > 5) {
+    // If movement exceeds threshold, start dragging
+    if (!hasMoved && (dx > 5 || dy > 5)) {
+      hasMoved = true;
       isDragging.value = true;
+
+      // Clean up listeners before starting drag
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
-      await getCurrentWebviewWindow().startDragging();
+
+      // Start window dragging (don't await - it blocks until drag ends)
+      getCurrentWebviewWindow().startDragging().finally(() => {
+        // Keep isDragging true briefly to prevent click from firing
+        setTimeout(() => {
+          isDragging.value = false;
+        }, 100);
+      });
     }
   };
 
   const onMouseUp = () => {
     window.removeEventListener("mousemove", onMouseMove);
     window.removeEventListener("mouseup", onMouseUp);
+    // If we didn't move, isDragging stays false and click will fire
   };
 
   window.addEventListener("mousemove", onMouseMove);
   window.addEventListener("mouseup", onMouseUp);
+}
+
+function handleRightClick(e: MouseEvent) {
+  e.preventDefault();
+  store.toggleSettings();
 }
 </script>
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import MicButton from "./MicButton.vue";
 import { useAppStore } from "../stores/appStore";
@@ -8,9 +8,50 @@ import { openSettings } from "../composables/useTauri";
 const store = useAppStore();
 const showCopyNotification = computed(() => store.showCopyNotification);
 
-async function startDrag(event: MouseEvent) {
+const isDragging = ref(false);
+
+function handleMouseDown(event: MouseEvent) {
+  // Only handle left click
   if (event.button !== 0) return;
-  await getCurrentWebviewWindow().startDragging();
+
+  // Don't start drag if clicking on interactive elements
+  const target = event.target as HTMLElement;
+  if (target.tagName === 'BUTTON' || target.closest('button')) {
+    return;
+  }
+
+  const startX = event.clientX;
+  const startY = event.clientY;
+  let hasMoved = false;
+
+  const onMouseMove = (e: MouseEvent) => {
+    const dx = Math.abs(e.clientX - startX);
+    const dy = Math.abs(e.clientY - startY);
+
+    // Only start dragging if movement exceeds threshold
+    if (!hasMoved && (dx > 5 || dy > 5)) {
+      hasMoved = true;
+      isDragging.value = true;
+
+      // Clean up listeners before starting drag
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+
+      // Start window dragging (don't await - it blocks until drag ends)
+      getCurrentWebviewWindow().startDragging().finally(() => {
+        isDragging.value = false;
+      });
+    }
+  };
+
+  const onMouseUp = () => {
+    window.removeEventListener("mousemove", onMouseMove);
+    window.removeEventListener("mouseup", onMouseUp);
+    isDragging.value = false;
+  };
+
+  window.addEventListener("mousemove", onMouseMove);
+  window.addEventListener("mouseup", onMouseUp);
 }
 </script>
 
@@ -18,9 +59,9 @@ async function startDrag(event: MouseEvent) {
   <div class="fixed inset-0 flex items-center justify-center pointer-events-none">
     <!-- Windows fix: minimal alpha background on clickable area to receive events on transparent windows -->
     <div
-      class="relative pointer-events-auto cursor-move p-4 -m-4 rounded-full"
+      class="relative pointer-events-auto p-4 -m-4 rounded-full"
       style="background: rgba(0,0,0,0.01)"
-      @mousedown="startDrag"
+      @mousedown="handleMouseDown"
     >
       <!-- Mic Button -->
       <MicButton />

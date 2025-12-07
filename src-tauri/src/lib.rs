@@ -40,9 +40,15 @@ pub fn run() {
 
             // Configure overlay window with platform-specific behavior
             if let Some(window) = app.get_webview_window("main") {
+                tracing::info!("Main window found, configuring platform-specific settings");
+
                 if let Err(e) = platform::get_platform().configure_overlay_window(&window) {
                     tracing::warn!("Failed to configure overlay window: {}", e);
+                } else {
+                    tracing::info!("Platform overlay configuration applied");
                 }
+            } else {
+                tracing::error!("Main window NOT FOUND! This is a critical error.");
             }
 
             // Setup system tray
