@@ -78,7 +78,8 @@ jobs:
             libjavascriptcoregtk-4.1-dev \
             rpm \
             libvulkan-dev \
-            vulkan-tools
+            vulkan-tools \
+            glslang-tools
 
       - name: Install Windows dependencies
         if: matrix.platform.os == 'windows-latest'
