@@ -33,15 +33,16 @@ cpal = "0.15"
 # Random for mock/testing
 rand = "0.8"
 
-# Windows: raw-window-handle for overlay configuration
+# Windows: raw-window-handle for overlay configuration + Whisper with Vulkan GPU support
 [target.'cfg(target_os = "windows")'.dependencies]
 raw-window-handle = "0.6"
+whisper-rs = { version = "0.13", default-features = false, features = ["vulkan"] }
 
-# Whisper.cpp bindings (base, CPU-only by default)
-[target.'cfg(not(target_os = "macos"))'.dependencies]
-whisper-rs = { version = "0.13", default-features = false }
+# Linux: Whisper with Vulkan (universal GPU support: NVIDIA, AMD, Intel)
+[target.'cfg(target_os = "linux")'.dependencies]
+whisper-rs = { version = "0.13", default-features = false, features = ["vulkan"] }
 
-# macOS: Whisper with Metal + Objective-C bindings for permissions and window management
+# macOS: Whisper with Metal (optimal for Apple Silicon and Intel Macs)
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.13", default-features = false, features = ["metal"] }
 objc2 = "0.6"

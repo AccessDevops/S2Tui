@@ -82,10 +82,10 @@
         "bundleMediaFramework": true
       },
       "deb": {
-        "depends": ["libasound2", "libssl3"]
+        "depends": ["libasound2", "libssl3", "libvulkan1"]
       },
       "rpm": {
-        "depends": ["alsa-lib", "openssl"],
+        "depends": ["alsa-lib", "openssl", "vulkan-loader"],
         "epoch": 0,
         "release": "1"
       }

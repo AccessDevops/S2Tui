@@ -74,7 +74,8 @@ pub fn detect_active_backend() -> GpuBackend {
         }
     }
 
-    #[cfg(feature = "gpu-vulkan")]
+    // Vulkan by default for Windows/Linux (aligned with Cargo.toml target dependencies)
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     {
         if is_vulkan_available() {
             tracing::info!("GPU: Vulkan backend enabled and available");
@@ -88,7 +89,7 @@ pub fn detect_active_backend() -> GpuBackend {
         target_os = "macos",
         feature = "gpu-cuda",
         feature = "gpu-hipblas",
-        feature = "gpu-vulkan"
+        any(target_os = "windows", target_os = "linux")
     )))]
     tracing::info!("GPU: Using CPU-only processing");
 
@@ -120,7 +121,8 @@ pub fn get_compiled_backends() -> Vec<GpuBackend> {
         b
     };
 
-    #[cfg(feature = "gpu-vulkan")]
+    // Vulkan compiled by default for Windows/Linux (from Cargo.toml target dependencies)
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     let backends = {
         let mut b = backends;
         b.push(GpuBackend::Vulkan);
@@ -200,7 +202,7 @@ fn is_hipblas_available() -> bool {
 }
 
 /// Check if Vulkan is available on the system
-#[cfg(feature = "gpu-vulkan")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 fn is_vulkan_available() -> bool {
     use std::process::Command;
 
@@ -245,7 +247,7 @@ fn is_vulkan_available() -> bool {
     }
 }
 
-#[cfg(not(feature = "gpu-vulkan"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 #[allow(dead_code)]
 fn is_vulkan_available() -> bool {
     false
