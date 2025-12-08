@@ -7,6 +7,8 @@ let store: Store | null = null;
 
 export interface PersistedSettings extends Settings {
   history: HistoryEntry[];
+  vulkanWarningDismissed: boolean;
+  welcomeDismissed: boolean;
 }
 
 const defaultSettings: PersistedSettings = {
@@ -15,6 +17,8 @@ const defaultSettings: PersistedSettings = {
   autoCopy: true,
   shortcut: "CommandOrControl+Shift+Space",
   history: [],
+  vulkanWarningDismissed: false,
+  welcomeDismissed: false,
 };
 
 async function getStore(): Promise<Store> {
@@ -31,16 +35,12 @@ export async function loadSettings(): Promise<PersistedSettings> {
   try {
     const s = await getStore();
     const settings = await s.get<PersistedSettings>("settings");
-    console.log("[useStore] Raw settings from store:", settings);
     if (settings) {
-      const merged = { ...defaultSettings, ...settings };
-      console.log("[useStore] Merged settings:", merged);
-      return merged;
+      return { ...defaultSettings, ...settings };
     }
   } catch (error) {
     console.error("Failed to load settings:", error);
   }
-  console.log("[useStore] Returning default settings");
   return defaultSettings;
 }
 
@@ -49,10 +49,8 @@ export async function saveSettings(settings: Partial<PersistedSettings>): Promis
     const s = await getStore();
     const current = await loadSettings();
     const updated = { ...current, ...settings };
-    console.log("[useStore] Saving settings:", settings, "-> Updated:", updated);
     await s.set("settings", updated);
     await s.save();
-    console.log("[useStore] Settings saved successfully");
   } catch (error) {
     console.error("Failed to save settings:", error);
   }

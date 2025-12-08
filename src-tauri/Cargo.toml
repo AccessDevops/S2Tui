@@ -4,10 +4,16 @@ version = "0.1.0"
 description = "Speech-to-Text UI - Local transcription with Whisper"
 authors = ["S2Tui"]
 edition = "2021"
+default-run = "s2tui-app"  # Default binary for `cargo run` and `tauri dev`
 
 [lib]
 name = "s2tui_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
+
+# Main Tauri application binary
+[[bin]]
+name = "s2tui-app"
+path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -19,6 +25,7 @@ tauri-plugin-shell = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-store = "2"
 tauri-plugin-os = "2"
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -33,14 +40,22 @@ cpal = "0.15"
 # Random for mock/testing
 rand = "0.8"
 
-# Windows: raw-window-handle for overlay configuration + Whisper with Vulkan GPU support
+# Windows dependencies
 [target.'cfg(target_os = "windows")'.dependencies]
 raw-window-handle = "0.6"
-whisper-rs = { version = "0.13", default-features = false, features = ["vulkan"] }
+ash = "0.38"  # Vulkan bindings for runtime GPU detection
+# whisper-rs is added via features below
 
-# Linux: Whisper with Vulkan (universal GPU support: NVIDIA, AMD, Intel)
+# Linux dependencies
 [target.'cfg(target_os = "linux")'.dependencies]
-whisper-rs = { version = "0.13", default-features = false, features = ["vulkan"] }
+ash = "0.38"  # Vulkan bindings for runtime GPU detection
+# whisper-rs is added via features below
+
+# Windows/Linux: whisper-rs with configurable GPU support
+[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies.whisper-rs]
+version = "0.13"
+default-features = false
+# Features are controlled by Cargo features (gpu-vulkan adds vulkan)
 
 # macOS: Whisper with Metal (optimal for Apple Silicon and Intel Macs)
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -53,17 +68,17 @@ block2 = "0.6"
 core-foundation = "0.10"
 
 [features]
-default = ["custom-protocol"]
+default = ["custom-protocol", "gpu-vulkan"]  # GPU enabled by default
 custom-protocol = ["tauri/custom-protocol"]
 
-# GPU acceleration features (optional, enable at build time)
-# Examples:
-#   cargo build --features gpu-cuda           (NVIDIA on Windows/Linux)
-#   cargo build --features gpu-hipblas        (AMD on Linux)
-#   cargo build --features gpu-vulkan         (Universal GPU)
-gpu-cuda = ["whisper-rs/cuda"]        # NVIDIA GPUs (Windows/Linux)
-gpu-hipblas = ["whisper-rs/hipblas"]  # AMD GPUs via ROCm (Linux only)
-gpu-vulkan = ["whisper-rs/vulkan"]    # Cross-platform GPU via Vulkan
+# GPU acceleration features for Windows/Linux
+# macOS always uses Metal (configured in target dependencies)
+# Vulkan is REQUIRED on Windows/Linux - app shows warning if not available
+gpu-vulkan = ["whisper-rs/vulkan"]    # Vulkan GPU acceleration (Windows/Linux)
+
+# Additional GPU backends (optional)
+gpu-cuda = ["whisper-rs/cuda"]        # NVIDIA CUDA (Windows/Linux)
+gpu-hipblas = ["whisper-rs/hipblas"]  # AMD ROCm (Linux only)
 
 [profile.release]
 panic = "abort"

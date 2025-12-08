@@ -71,8 +71,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  build:
-    name: Build (${{ matrix.platform.name }})
+  # macOS build - single binary with Metal (no launcher needed)
+  build-macos:
+    name: Build (macOS)
     needs: create-release
     strategy:
       fail-fast: false
@@ -81,19 +82,9 @@ jobs:
           - name: macOS-arm64
             os: macos-14
             target: aarch64-apple-darwin
-            bundles: dmg
           - name: macOS-x64
             os: macos-13
             target: x86_64-apple-darwin
-            bundles: dmg
-          - name: Windows
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
-            bundles: nsis,msi
-          - name: Linux
-            os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            bundles: appimage,deb,rpm
 
     runs-on: ${{ matrix.platform.os }}
 
@@ -105,7 +96,6 @@ jobs:
         shell: bash
         run: |
           mkdir -p src-tauri/models
-          # Simplified naming without quantization suffix for easier maintenance
           curl -L -o src-tauri/models/ggml-small.bin \
             "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin"
           curl -L -o src-tauri/models/ggml-large-v3-turbo.bin \
@@ -128,8 +118,137 @@ jobs:
           workspaces: src-tauri -> target
           key: ${{ matrix.platform.target }}
 
-      - name: Install Linux dependencies
-        if: matrix.platform.os == 'ubuntu-22.04'
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CI: true
+        with:
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          args: --target ${{ matrix.platform.target }} --bundles dmg
+
+  # Windows build - single binary with Vulkan (shows warning if Vulkan unavailable)
+  build-windows:
+    name: Build (Windows)
+    needs: create-release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Whisper models
+        shell: bash
+        run: |
+          mkdir -p src-tauri/models
+          curl -L -o src-tauri/models/ggml-small.bin \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin"
+          curl -L -o src-tauri/models/ggml-large-v3-turbo.bin \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          Write-Host "Installing CMake and Ninja..."
+          choco install cmake ninja -y --no-progress
+
+          Write-Host "Downloading Vulkan SDK..."
+          $vulkanVersion = "1.4.304.0"
+          $vulkanUrl = "https://sdk.lunarg.com/sdk/download/$vulkanVersion/windows/VulkanSDK-$vulkanVersion-Installer.exe"
+          $installerPath = "$env:TEMP\VulkanSDK-Installer.exe"
+          Invoke-WebRequest -Uri $vulkanUrl -OutFile $installerPath
+
+          Write-Host "Installing Vulkan SDK..."
+          Start-Process -FilePath $installerPath -ArgumentList "/S" -Wait -NoNewWindow
+
+          $vulkanPath = "C:\VulkanSDK\$vulkanVersion"
+          if (Test-Path $vulkanPath) {
+            echo "VULKAN_SDK=$vulkanPath" >> $env:GITHUB_ENV
+            Write-Host "VULKAN_SDK set to: $vulkanPath"
+          } else {
+            Write-Host "Vulkan SDK installation failed!"
+            exit 1
+          }
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CMAKE_GENERATOR: Ninja
+        with:
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          args: --bundles nsis,msi
+
+      - name: Create portable ZIP
+        shell: pwsh
+        run: |
+          $version = "${{ needs.create-release.outputs.version }}"
+          $distDir = "S2Tui-portable"
+
+          # Create distribution directory
+          New-Item -ItemType Directory -Force -Path $distDir
+          New-Item -ItemType Directory -Force -Path "$distDir/models"
+
+          # Copy single binary
+          Copy-Item "src-tauri/target/release/S2Tui.exe" "$distDir/"
+
+          # Copy models
+          Copy-Item "src-tauri/models/*.bin" "$distDir/models/"
+
+          # Create ZIP
+          Compress-Archive -Path "$distDir/*" -DestinationPath "S2Tui_${version}_windows_x64_portable.zip"
+
+      - name: Upload portable ZIP
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.create-release.outputs.version }}
+          files: S2Tui_*_windows_x64_portable.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Linux build - single binary with Vulkan (shows warning if Vulkan unavailable)
+  build-linux:
+    name: Build (Linux)
+    needs: create-release
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Whisper models
+        run: |
+          mkdir -p src-tauri/models
+          curl -L -o src-tauri/models/ggml-small.bin \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin"
+          curl -L -o src-tauri/models/ggml-large-v3-turbo.bin \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -142,45 +261,16 @@ jobs:
             libgtk-3-dev \
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev \
-            rpm \
             wget \
             libvulkan-dev \
             libxcb-shm0
 
-          # Download and install Vulkan SDK (includes glslc compiler required by whisper-rs)
+          # Download and install Vulkan SDK
           VULKAN_VERSION=1.3.296.0
           wget -q "https://sdk.lunarg.com/sdk/download/${VULKAN_VERSION}/linux/vulkansdk-linux-x86_64-${VULKAN_VERSION}.tar.xz"
           tar -xf vulkansdk-linux-x86_64-${VULKAN_VERSION}.tar.xz
           echo "VULKAN_SDK=$PWD/${VULKAN_VERSION}/x86_64" >> $GITHUB_ENV
           echo "$PWD/${VULKAN_VERSION}/x86_64/bin" >> $GITHUB_PATH
-
-      - name: Install Windows dependencies
-        if: matrix.platform.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          Write-Host "Installing CMake and Ninja..."
-          choco install cmake ninja -y --no-progress
-
-          Write-Host "Downloading Vulkan SDK..."
-          $vulkanVersion = "1.4.304.0"
-          $vulkanUrl = "https://sdk.lunarg.com/sdk/download/$vulkanVersion/windows/VulkanSDK-$vulkanVersion-Installer.exe"
-          $installerPath = "$env:TEMP\VulkanSDK-Installer.exe"
-
-          Invoke-WebRequest -Uri $vulkanUrl -OutFile $installerPath
-
-          Write-Host "Installing Vulkan SDK..."
-          Start-Process -FilePath $installerPath -ArgumentList "/S" -Wait -NoNewWindow
-
-          # Set VULKAN_SDK environment variable
-          $vulkanPath = "C:\VulkanSDK\$vulkanVersion"
-          if (Test-Path $vulkanPath) {
-            echo "VULKAN_SDK=$vulkanPath" >> $env:GITHUB_ENV
-            $env:VULKAN_SDK = $vulkanPath
-            Write-Host "✅ VULKAN_SDK set to: $vulkanPath"
-          } else {
-            Write-Host "❌ Vulkan SDK installation failed!"
-            exit 1
-          }
 
       - name: Install frontend dependencies
         run: npm ci
@@ -189,38 +279,36 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CI: true  # Required for macOS DMG bundling in headless CI environment
-          # macOS signing - only set if secrets are configured
-          # To enable: add APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, etc. to repository secrets
-          # Windows updater signing - only set if secrets are configured
-          # To enable: add TAURI_SIGNING_PRIVATE_KEY to repository secrets
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
-          args: --target ${{ matrix.platform.target }} --bundles ${{ matrix.platform.bundles }}
+          args: --bundles appimage,deb,rpm
 
-      # Upload portable ZIP for Windows
-      - name: Create Windows portable ZIP
-        if: matrix.platform.os == 'windows-latest'
-        shell: pwsh
+      - name: Create portable tarball
         run: |
-          $version = "${{ needs.create-release.outputs.version }}"
-          $exePath = "src-tauri/target/${{ matrix.platform.target }}/release/S2Tui.exe"
-          if (Test-Path $exePath) {
-            Compress-Archive -Path $exePath -DestinationPath "S2Tui_${version}_windows_portable.zip"
-          }
+          version="${{ needs.create-release.outputs.version }}"
+          distDir="S2Tui-portable"
 
-      - name: Upload Windows portable
-        if: matrix.platform.os == 'windows-latest'
+          mkdir -p "$distDir/models"
+
+          # Copy single binary
+          cp src-tauri/target/release/s2tui-app "$distDir/S2Tui"
+          cp src-tauri/models/*.bin "$distDir/models/"
+
+          chmod +x "$distDir/S2Tui"
+
+          tar -czvf "S2Tui_${version}_linux_x64_portable.tar.gz" "$distDir"
+
+      - name: Upload portable tarball
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ needs.create-release.outputs.version }}
-          files: S2Tui_*_windows_portable.zip
+          files: S2Tui_*_linux_x64_portable.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   publish-release:
     name: Publish Release
-    needs: [create-release, build]
+    needs: [create-release, build-macos, build-windows, build-linux]
     runs-on: ubuntu-latest
     steps:
       - name: Publish release

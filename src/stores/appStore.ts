@@ -4,6 +4,35 @@ import { ref, computed } from "vue";
 export type AppStatus = "idle" | "listening" | "processing" | "error";
 export type ModelId = "small" | "large-v3-turbo";
 export type Language = "auto" | "en" | "fr" | "es" | "de" | "it" | "pt" | "nl" | "ja" | "zh" | "ko" | "ar" | "hi" | "pl";
+export type GpuBackendType = "cpu" | "vulkan" | "metal" | "cuda" | "hipblas";
+
+// System health check types
+export interface SystemHealth {
+  vulkanAvailable: boolean;
+  vulkanVersion: string | null;
+  gpuBackend: GpuBackendType;
+  osInfo: {
+    platform: string;
+    version: string | null;
+    distribution: string | null;
+  };
+  installGuide: VulkanInstallGuide | null;
+  canRunWithoutVulkan: boolean;
+}
+
+export interface VulkanInstallGuide {
+  title: string;
+  description: string;
+  steps: string[];
+  downloadUrls: { name: string; url: string; description: string }[];
+  terminalCommands: string[] | null;
+}
+
+export interface GpuStatus {
+  usingGpu: boolean;
+  backend: string;
+  fallbackUsed: boolean;
+}
 
 export interface ModelInfo {
   id: ModelId;
@@ -40,10 +69,17 @@ export const useAppStore = defineStore("app", () => {
   const vuLevel = ref(0);
   const partialTranscript = ref("");
   const lastTranscript = ref("");
-  const showSettings = ref(false);
-  const showPermissionGuide = ref(false);
-  const permissionType = ref<"microphone" | null>(null);
   const showCopyNotification = ref(false);
+
+  // Error toast state
+  const errorMessage = ref<string | null>(null);
+  const errorVisible = ref(false);
+
+  // System health state
+  const systemHealth = ref<SystemHealth | null>(null);
+  const gpuStatus = ref<GpuStatus | null>(null);
+  const vulkanWarningDismissed = ref(false);
+  const welcomeDismissed = ref(false);
 
   const settings = ref<Settings>({
     language: "auto",
@@ -89,13 +125,23 @@ export const useAppStore = defineStore("app", () => {
     partialTranscript.value = "";
   }
 
-  function toggleSettings() {
-    showSettings.value = !showSettings.value;
+  // Error toast actions
+  function showError(message: string) {
+    errorMessage.value = message;
+    errorVisible.value = true;
+    setTimeout(() => {
+      errorVisible.value = false;
+      errorMessage.value = null;
+    }, 5000);
+  }
+
+  function clearError() {
+    errorMessage.value = null;
+    errorVisible.value = false;
   }
 
   async function openPermissionGuide(type: "microphone") {
-    permissionType.value = type;
-    // Open a dedicated permission window instead of inline modal
+    // Open a dedicated permission window
     const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
 
     // Check if permission window already exists
@@ -124,11 +170,6 @@ export const useAppStore = defineStore("app", () => {
     permWindow.once("tauri://error", (e) => {
       console.error("Failed to create permissions window:", e);
     });
-  }
-
-  function closePermissionGuide() {
-    showPermissionGuide.value = false;
-    permissionType.value = null;
   }
 
   function updateSettings(newSettings: Partial<Settings>) {
@@ -192,20 +233,103 @@ export const useAppStore = defineStore("app", () => {
     }, 2000);
   }
 
+  // System health actions
+  function setSystemHealth(health: SystemHealth) {
+    systemHealth.value = health;
+  }
+
+  function setGpuStatus(status: GpuStatus) {
+    gpuStatus.value = status;
+  }
+
+  function setVulkanWarningDismissed(dismissed: boolean) {
+    vulkanWarningDismissed.value = dismissed;
+  }
+
+  async function openVulkanWarningModal() {
+    const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+
+    // Check if window already exists
+    const existingWindow = await WebviewWindow.getByLabel("vulkan-warning");
+    if (existingWindow) {
+      await existingWindow.setFocus();
+      return;
+    }
+
+    // Create new vulkan warning window with native decorations
+    const warningWindow = new WebviewWindow("vulkan-warning", {
+      url: "vulkan-warning.html",
+      title: "GPU Acceleration - S2Tui",
+      width: 520,
+      height: 580,
+      minWidth: 450,
+      minHeight: 450,
+      resizable: true,
+      center: true,
+      decorations: true,
+      transparent: false,
+      shadow: true,
+      alwaysOnTop: false,
+    });
+
+    warningWindow.once("tauri://error", (e) => {
+      console.error("Failed to create vulkan warning window:", e);
+    });
+  }
+
+  function setWelcomeDismissed(dismissed: boolean) {
+    welcomeDismissed.value = dismissed;
+  }
+
+  async function openWelcomeModal() {
+    const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+
+    // Check if window already exists
+    const existingWindow = await WebviewWindow.getByLabel("welcome");
+    if (existingWindow) {
+      await existingWindow.setFocus();
+      return;
+    }
+
+    // Create new welcome window
+    const welcomeWindow = new WebviewWindow("welcome", {
+      url: "welcome.html",
+      title: "Welcome - S2Tui",
+      width: 550,
+      height: 750,
+      minWidth: 450,
+      minHeight: 650,
+      resizable: false,
+      center: true,
+      decorations: false,
+      transparent: false,
+      shadow: true,
+      alwaysOnTop: false,
+    });
+
+    welcomeWindow.once("tauri://error", (e) => {
+      console.error("Failed to create welcome window:", e);
+    });
+  }
+
   return {
     // State
     status,
     vuLevel,
     partialTranscript,
     lastTranscript,
-    showSettings,
-    showPermissionGuide,
-    permissionType,
     showCopyNotification,
+    errorMessage,
+    errorVisible,
     settings,
     permissions,
     models,
     history,
+    // System health state
+    systemHealth,
+    gpuStatus,
+    vulkanWarningDismissed,
+    welcomeDismissed,
     // Computed
     isListening,
     isProcessing,
@@ -216,9 +340,9 @@ export const useAppStore = defineStore("app", () => {
     setVuLevel,
     setPartialTranscript,
     setLastTranscript,
-    toggleSettings,
+    showError,
+    clearError,
     openPermissionGuide,
-    closePermissionGuide,
     updateSettings,
     updateModelProgress,
     setModelDownloaded,
@@ -228,5 +352,12 @@ export const useAppStore = defineStore("app", () => {
     clearHistory,
     removeFromHistory,
     triggerCopyNotification,
+    // System health actions
+    setSystemHealth,
+    setGpuStatus,
+    setVulkanWarningDismissed,
+    openVulkanWarningModal,
+    setWelcomeDismissed,
+    openWelcomeModal,
   };
 });

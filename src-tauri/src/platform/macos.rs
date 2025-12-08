@@ -14,7 +14,13 @@ pub struct MacOSPlatform;
 impl PlatformIntegration for MacOSPlatform {
     fn check_microphone_permission(&self) -> PermissionStatus {
         let status = unsafe {
-            let media_type = AVMediaTypeAudio.expect("AVMediaTypeAudio should be available");
+            let media_type = match AVMediaTypeAudio {
+                Some(mt) => mt,
+                None => {
+                    tracing::error!("AVMediaTypeAudio not available on this system");
+                    return PermissionStatus::NotDetermined;
+                }
+            };
             AVCaptureDevice::authorizationStatusForMediaType(media_type)
         };
 
@@ -47,7 +53,15 @@ impl PlatformIntegration for MacOSPlatform {
         });
 
         unsafe {
-            let media_type = AVMediaTypeAudio.expect("AVMediaTypeAudio should be available");
+            let media_type = match AVMediaTypeAudio {
+                Some(mt) => mt,
+                None => {
+                    tracing::error!("AVMediaTypeAudio not available for permission request");
+                    return Err(PlatformError::OperationFailed(
+                        "AVMediaTypeAudio not available".to_string(),
+                    ));
+                }
+            };
             AVCaptureDevice::requestAccessForMediaType_completionHandler(media_type, &block);
         }
 

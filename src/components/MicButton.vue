@@ -2,7 +2,7 @@
 import { computed, ref } from "vue";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useAppStore } from "../stores/appStore";
-import { useTauri } from "../composables/useTauri";
+import { useTauri, openSettings } from "../composables/useTauri";
 import VuMeter from "./VuMeter.vue";
 
 const store = useAppStore();
@@ -84,7 +84,7 @@ function handleMouseDown(event: MouseEvent) {
 
 function handleRightClick(e: MouseEvent) {
   e.preventDefault();
-  store.toggleSettings();
+  openSettings();
 }
 </script>
 

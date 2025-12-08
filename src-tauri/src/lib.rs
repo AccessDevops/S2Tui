@@ -1,6 +1,5 @@
 mod audio;
 mod commands;
-mod events;
 mod platform;
 mod state;
 mod whisper;
@@ -24,6 +23,23 @@ pub fn run() {
         .with(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
+    // Check GPU availability on Windows/Linux BEFORE starting full Tauri app
+    // If Vulkan is not available, launch only the warning window
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    {
+        if !whisper::is_vulkan_available_at_startup() {
+            tracing::warn!("Vulkan not available - launching warning window only");
+            run_vulkan_warning_mode();
+            return;
+        }
+        tracing::info!("Vulkan detected - starting full application");
+    }
+
+    run_full_app();
+}
+
+/// Run the full application with all features
+fn run_full_app() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
@@ -69,9 +85,15 @@ pub fn run() {
             commands::request_microphone_permission,
             commands::get_available_models,
             commands::get_gpu_info,
+            commands::check_system_health,
+            commands::get_gpu_status,
+            commands::load_whisper_model_with_options,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .unwrap_or_else(|e| {
+            tracing::error!("Failed to run Tauri application: {}", e);
+            std::process::exit(1);
+        });
 }
 
 // Window configuration is now handled by the platform module
@@ -132,7 +154,16 @@ fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>>
 
     // Load tray icon from embedded bytes
     let icon_bytes = include_bytes!("../icons/32x32.png");
-    let icon = Image::from_bytes(icon_bytes).expect("Failed to load tray icon");
+    let icon = match Image::from_bytes(icon_bytes) {
+        Ok(img) => img,
+        Err(e) => {
+            tracing::error!(
+                "Failed to load tray icon: {}. Continuing without system tray.",
+                e
+            );
+            return Ok(());
+        }
+    };
 
     // Build and store the tray icon
     let _tray = TrayIconBuilder::new()
@@ -173,4 +204,50 @@ fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>>
 
     tracing::info!("System tray initialized");
     Ok(())
+}
+
+/// Run the application in Vulkan warning mode only.
+/// This launches a minimal Tauri app with only the vulkan-warning window,
+/// blocking further use until Vulkan is installed.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn run_vulkan_warning_mode() {
+    use tauri::WebviewWindowBuilder;
+
+    tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_process::init())
+        .setup(|app| {
+            // Create only the vulkan-warning window
+            let window = WebviewWindowBuilder::new(
+                app,
+                "vulkan-warning",
+                tauri::WebviewUrl::App("vulkan-warning.html".into()),
+            )
+            .title("S2Tui - Vulkan Required")
+            .inner_size(520.0, 620.0)
+            .min_inner_size(450.0, 500.0)
+            .resizable(true)
+            .center()
+            .decorations(true)
+            .build()?;
+
+            // Exit app when window is closed
+            let app_handle = app.handle().clone();
+            window.on_window_event(move |event| {
+                if let tauri::WindowEvent::CloseRequested { .. } = event {
+                    app_handle.exit(0);
+                }
+            });
+
+            tracing::info!("Vulkan warning window launched");
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![commands::check_system_health,])
+        .run(tauri::generate_context!())
+        .unwrap_or_else(|e| {
+            tracing::error!("Failed to run Vulkan warning mode: {}", e);
+            std::process::exit(1);
+        });
 }

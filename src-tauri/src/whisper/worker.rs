@@ -1,9 +1,12 @@
 use parking_lot::Mutex;
+use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread::available_parallelism;
 use thiserror::Error;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+
+use crate::whisper::GpuBackend;
 
 /// Calculate optimal thread count: 75% of available CPUs, minimum 1
 /// Leaves headroom for UI responsiveness and system tasks
@@ -26,6 +29,20 @@ pub enum WhisperError {
     TranscriptionError(String),
     #[error("Invalid audio data")]
     InvalidAudio,
+}
+
+/// Résultat du chargement du modèle
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelLoadResult {
+    /// Chargement réussi
+    pub success: bool,
+    /// GPU utilisé pour le modèle
+    pub using_gpu: bool,
+    /// Backend utilisé (nom)
+    pub backend: String,
+    /// Fallback CPU utilisé après échec GPU
+    pub fallback_used: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +70,10 @@ impl Default for WhisperConfig {
 pub struct WhisperEngine {
     context: Option<WhisperContext>,
     config: WhisperConfig,
+    /// Track if GPU is being used for transcription
+    using_gpu: bool,
+    /// Track if fallback to CPU was used
+    fallback_used: bool,
 }
 
 impl WhisperEngine {
@@ -60,52 +81,134 @@ impl WhisperEngine {
         Self {
             context: None,
             config: WhisperConfig::default(),
+            using_gpu: false,
+            fallback_used: false,
         }
     }
 
-    /// Load a model from the given path
+    /// Check if GPU is being used
+    pub fn is_using_gpu(&self) -> bool {
+        self.using_gpu
+    }
+
+    /// Check if fallback to CPU was used
+    pub fn was_fallback_used(&self) -> bool {
+        self.fallback_used
+    }
+
+    /// Get the current backend name
+    pub fn get_backend_name(&self) -> String {
+        if self.using_gpu {
+            crate::whisper::detect_active_backend().name().to_string()
+        } else {
+            "CPU".to_string()
+        }
+    }
+
+    /// Load a model from the given path (legacy method, uses GPU if available)
     pub fn load_model(&mut self, model_path: PathBuf) -> Result<(), WhisperError> {
+        self.load_model_with_options(model_path, false).map(|_| ())
+    }
+
+    /// Load a model with explicit CPU/GPU control
+    /// Returns ModelLoadResult with details about the loading
+    pub fn load_model_with_options(
+        &mut self,
+        model_path: PathBuf,
+        force_cpu: bool,
+    ) -> Result<ModelLoadResult, WhisperError> {
         if !model_path.exists() {
             return Err(WhisperError::ModelNotFound(
                 model_path.display().to_string(),
             ));
         }
 
-        // Detect and log GPU backend before loading
+        // Detect GPU backend
         let gpu_backend = crate::whisper::detect_active_backend();
+        let should_use_gpu = gpu_backend != GpuBackend::Cpu && !force_cpu;
+
         tracing::info!(
-            "Loading Whisper model with {} backend: {}",
-            gpu_backend.name(),
-            model_path.display()
+            "Loading Whisper model: {} (force_cpu={}, detected_backend={:?})",
+            model_path.display(),
+            force_cpu,
+            gpu_backend
         );
 
-        let ctx = WhisperContext::new_with_params(
-            model_path
-                .to_str()
-                .ok_or_else(|| WhisperError::LoadError("Invalid model path".to_string()))?,
-            WhisperContextParameters::default(),
-        )
-        .map_err(|e| WhisperError::LoadError(e.to_string()))?;
+        let model_path_str = model_path
+            .to_str()
+            .ok_or_else(|| WhisperError::LoadError("Invalid model path".to_string()))?;
+
+        // First attempt: with GPU if available and not forced CPU
+        if should_use_gpu {
+            tracing::info!(
+                "Attempting to load model with GPU ({})...",
+                gpu_backend.name()
+            );
+
+            let mut params = WhisperContextParameters::default();
+            params.use_gpu(true);
+
+            match WhisperContext::new_with_params(model_path_str, params) {
+                Ok(ctx) => {
+                    self.context = Some(ctx);
+                    self.config.model_path = model_path;
+                    self.using_gpu = true;
+                    self.fallback_used = false;
+
+                    tracing::info!(
+                        "Whisper model loaded successfully with {} GPU acceleration",
+                        gpu_backend.name()
+                    );
+
+                    return Ok(ModelLoadResult {
+                        success: true,
+                        using_gpu: true,
+                        backend: gpu_backend.name().to_string(),
+                        fallback_used: false,
+                    });
+                }
+                Err(gpu_error) => {
+                    tracing::warn!(
+                        "GPU loading failed: {}. Retrying with CPU fallback...",
+                        gpu_error
+                    );
+
+                    // Fall through to CPU attempt
+                }
+            }
+        }
+
+        // CPU attempt (either forced or as fallback)
+        tracing::info!("Loading model with CPU...");
+
+        let mut cpu_params = WhisperContextParameters::default();
+        cpu_params.use_gpu(false);
+
+        let ctx = WhisperContext::new_with_params(model_path_str, cpu_params)
+            .map_err(|e| WhisperError::LoadError(format!("CPU loading failed: {}", e)))?;
 
         self.context = Some(ctx);
         self.config.model_path = model_path;
+        self.using_gpu = false;
+        self.fallback_used = should_use_gpu; // True if we tried GPU first and failed
 
-        tracing::info!(
-            "Whisper model loaded successfully with {} acceleration",
-            gpu_backend.name()
-        );
-        Ok(())
+        if self.fallback_used {
+            tracing::info!("Whisper model loaded with CPU (fallback from GPU failure)");
+        } else {
+            tracing::info!("Whisper model loaded with CPU (as requested)");
+        }
+
+        Ok(ModelLoadResult {
+            success: true,
+            using_gpu: false,
+            backend: "CPU".to_string(),
+            fallback_used: self.fallback_used,
+        })
     }
 
     /// Set the language for transcription (None for auto-detect)
     pub fn set_language(&mut self, language: Option<String>) {
         self.config.language = language;
-    }
-
-    /// Set whether to translate to English
-    #[allow(dead_code)]
-    pub fn set_translate(&mut self, translate: bool) {
-        self.config.translate = translate;
     }
 
     /// Check if a model is loaded
@@ -203,6 +306,17 @@ impl WhisperWorker {
         self.engine.lock().load_model(model_path)
     }
 
+    /// Load a model with explicit CPU/GPU control (thread-safe)
+    pub fn load_model_with_options(
+        &self,
+        model_path: PathBuf,
+        force_cpu: bool,
+    ) -> Result<ModelLoadResult, WhisperError> {
+        self.engine
+            .lock()
+            .load_model_with_options(model_path, force_cpu)
+    }
+
     /// Set language (thread-safe)
     pub fn set_language(&self, language: Option<String>) {
         self.engine.lock().set_language(language);
@@ -211,6 +325,21 @@ impl WhisperWorker {
     /// Check if model is loaded (thread-safe)
     pub fn is_loaded(&self) -> bool {
         self.engine.lock().is_loaded()
+    }
+
+    /// Check if GPU is being used (thread-safe)
+    pub fn is_using_gpu(&self) -> bool {
+        self.engine.lock().is_using_gpu()
+    }
+
+    /// Check if fallback was used (thread-safe)
+    pub fn was_fallback_used(&self) -> bool {
+        self.engine.lock().was_fallback_used()
+    }
+
+    /// Get current backend name (thread-safe)
+    pub fn get_backend_name(&self) -> String {
+        self.engine.lock().get_backend_name()
     }
 
     /// Transcribe samples (thread-safe)

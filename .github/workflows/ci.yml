@@ -124,6 +124,9 @@ jobs:
 
       - name: Check Rust
         working-directory: src-tauri
+        shell: bash
+        env:
+          CMAKE_GENERATOR: Ninja
         run: cargo check --target ${{ matrix.platform.target }}
 
   lint:

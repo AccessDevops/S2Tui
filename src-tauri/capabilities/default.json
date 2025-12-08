@@ -2,7 +2,7 @@
   "$schema": "https://schemas.tauri.app/config/2/capability",
   "identifier": "default",
   "description": "Default capability for S2Tui",
-  "windows": ["main", "settings", "permissions"],
+  "windows": ["main", "settings", "permissions", "welcome", "vulkan-warning"],
   "permissions": [
     "core:default",
     "core:window:default",
@@ -15,6 +15,8 @@
     "shell:default",
     "clipboard-manager:allow-write-text",
     "clipboard-manager:allow-read-text",
-    "store:default"
+    "store:default",
+    "process:allow-restart",
+    "process:allow-exit"
   ]
 }

@@ -1,34 +1,29 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { useAppStore, type ModelId, type Language } from "../stores/appStore";
+import { useAppStore, type ModelId, type Language, type SystemHealth, type GpuStatus } from "../stores/appStore";
 import { loadSettings, saveSettings, addHistoryEntry, loadHistory } from "./useStore";
 
 // Platform-aware settings window opener
 export async function openSettings() {
-  console.log("[openSettings] Function called!");
   // Check if settings window already exists
   const existingWindow = await WebviewWindow.getByLabel("settings");
   if (existingWindow) {
-    console.log("[openSettings] Settings window already exists, focusing...");
     await existingWindow.setFocus();
     return;
   }
-  console.log("[openSettings] Creating new settings window...");
 
   // Detect platform for platform-specific options
   let platform = "unknown";
   try {
     const os = await import("@tauri-apps/plugin-os");
     platform = os.platform();
-  } catch (e) {
-    console.warn("Could not detect platform:", e);
+  } catch {
+    // Platform detection failed, use defaults
   }
 
   // Build window options based on platform
   const isMacOS = platform === "macos";
-
-  console.log(`Creating settings window for platform: ${platform}`);
 
   const settingsWindow = new WebviewWindow("settings", {
     url: "settings.html",
@@ -41,8 +36,8 @@ export async function openSettings() {
     center: true,
     transparent: false,
     shadow: true,
-    // Platform-specific: macOS uses overlay titlebar, others use standard decorations
-    decorations: !isMacOS,
+    // No native decorations - we use custom title bar with close button
+    decorations: false,
     ...(isMacOS ? { titleBarStyle: "overlay" as const } : {}),
   });
 
@@ -128,11 +123,9 @@ export function useTauri() {
   // Commands - Model Management
   async function loadWhisperModel(model: ModelId) {
     try {
-      console.log("Loading whisper model:", model);
       await invoke("load_whisper_model", { model });
       store.updateSettings({ model });
       await saveSettings({ model });
-      console.log("Model saved to settings:", model);
     } catch (error) {
       console.error("Failed to load whisper model:", error);
       throw error;
@@ -176,12 +169,65 @@ export function useTauri() {
   // Commands - Model detection
   async function getAvailableModels(): Promise<string[]> {
     try {
-      const models = await invoke<string[]>("get_available_models");
-      console.log("Available models on disk:", models);
-      return models;
+      return await invoke<string[]>("get_available_models");
     } catch (error) {
       console.error("Failed to get available models:", error);
       return [];
+    }
+  }
+
+  // Commands - System Health
+  async function checkSystemHealth(): Promise<SystemHealth> {
+    try {
+      const health = await invoke<SystemHealth>("check_system_health");
+      store.setSystemHealth(health);
+      return health;
+    } catch (error) {
+      console.error("Failed to check system health:", error);
+      throw error;
+    }
+  }
+
+  async function getGpuStatus(): Promise<GpuStatus> {
+    try {
+      const status = await invoke<GpuStatus>("get_gpu_status");
+      store.setGpuStatus(status);
+      return status;
+    } catch (error) {
+      console.error("Failed to get GPU status:", error);
+      throw error;
+    }
+  }
+
+  interface ModelLoadResult {
+    success: boolean;
+    usingGpu: boolean;
+    backend: string;
+    fallbackUsed: boolean;
+  }
+
+  async function loadWhisperModelWithOptions(model: ModelId, forceCpu: boolean): Promise<ModelLoadResult> {
+    try {
+      const result = await invoke<ModelLoadResult>("load_whisper_model_with_options", {
+        model,
+        forceCpu,
+      });
+
+      // Update GPU status in store
+      store.setGpuStatus({
+        usingGpu: result.usingGpu,
+        backend: result.backend,
+        fallbackUsed: result.fallbackUsed,
+      });
+
+      // Update settings
+      store.updateSettings({ model });
+      await saveSettings({ model });
+
+      return result;
+    } catch (error) {
+      console.error("Failed to load whisper model with options:", error);
+      throw error;
     }
   }
 
@@ -190,7 +236,6 @@ export function useTauri() {
     try {
       // Load persisted settings
       const persisted = await loadSettings();
-      console.log("Loaded persisted settings:", persisted);
 
       // Update store with persisted settings
       store.updateSettings({
@@ -200,9 +245,20 @@ export function useTauri() {
         shortcut: persisted.shortcut,
       });
 
+      // Load persisted system health settings
+      store.setVulkanWarningDismissed(persisted.vulkanWarningDismissed ?? false);
+      store.setWelcomeDismissed(persisted.welcomeDismissed ?? false);
+
+      // Check system health (GPU/Vulkan availability)
+      let systemHealth: SystemHealth | null = null;
+      try {
+        systemHealth = await checkSystemHealth();
+      } catch {
+        // System health check failed, continue without GPU info
+      }
+
       // Detect actually available models on disk (not just persisted state)
       const availableModels = await getAvailableModels();
-      console.log("Available models on disk:", availableModels);
 
       // Reset all models to not downloaded first
       for (const model of store.models) {
@@ -218,17 +274,39 @@ export function useTauri() {
       const history = await loadHistory();
       store.setHistory(history);
 
+      // Show Vulkan warning if:
+      // - We checked system health
+      // - Vulkan is not available
+      // - User hasn't dismissed the warning
+      // - We're on Windows or Linux (not macOS which uses Metal)
+      const DEBUG_FORCE_VULKAN_WARNING = false;
+      const shouldShowVulkanWarning =
+        DEBUG_FORCE_VULKAN_WARNING ||
+        (systemHealth &&
+        !systemHealth.vulkanAvailable &&
+        !persisted.vulkanWarningDismissed &&
+        systemHealth.osInfo.platform !== "macos");
+
+      if (shouldShowVulkanWarning) {
+        // Show Vulkan warning first - Welcome modal will be shown when it closes
+        store.openVulkanWarningModal();
+      } else if (!persisted.welcomeDismissed) {
+        // No Vulkan warning needed - show welcome directly
+        store.openWelcomeModal();
+      }
+
       // Load the whisper model if available
       if (availableModels.includes(persisted.model)) {
         try {
-          console.log("Loading persisted model:", persisted.model);
-          await loadWhisperModel(persisted.model);
-          console.log("Whisper model loaded successfully:", persisted.model);
-        } catch (error) {
-          console.warn("Could not load whisper model:", error);
+          // On Windows/Linux without Vulkan, force CPU mode
+          // On macOS, Metal is always available so we never force CPU
+          const forceCpu = systemHealth && !systemHealth.vulkanAvailable && systemHealth.osInfo.platform !== "macos";
+
+          // Use the load function with GPU/CPU control
+          await loadWhisperModelWithOptions(persisted.model, forceCpu ?? false);
+        } catch {
+          // Model loading failed, user can select model in settings
         }
-      } else {
-        console.warn("Selected model not available on disk:", persisted.model, "Available:", availableModels);
       }
     } catch (error) {
       console.error("Failed to initialize app:", error);
@@ -239,11 +317,9 @@ export function useTauri() {
   async function initListeners() {
     // Prevent duplicate initialization
     if (listenersInitialized) {
-      console.log("[initListeners] Already initialized, skipping");
       return;
     }
     listenersInitialized = true;
-    console.log("[initListeners] Initializing listeners...");
 
     // Audio events
     unlistenFns.push(await listen<VadLevelPayload>("vad:level", (event) => {
@@ -302,7 +378,6 @@ export function useTauri() {
 
     // Permission granted event (from permission window)
     unlistenFns.push(await listen<{ type: string }>("permission:granted", (event) => {
-      console.log("[permission:granted] Received:", event.payload);
       if (event.payload.type === "microphone") {
         store.setPermissions({ microphone: true });
         // Reset status to idle so user can try again
@@ -315,9 +390,34 @@ export function useTauri() {
       store.updateSettings({ model: event.payload as ModelId });
     }));
 
+    // Vulkan warning dismissed event (from vulkan warning window)
+    unlistenFns.push(await listen<{ permanent: boolean }>("vulkan-warning:dismissed", async (event) => {
+      if (event.payload.permanent) {
+        store.setVulkanWarningDismissed(true);
+        await saveSettings({ vulkanWarningDismissed: true });
+      }
+    }));
+
+    // Vulkan warning closed event - open welcome modal after vulkan warning closes
+    unlistenFns.push(await listen<{ showWelcome: boolean }>("vulkan-warning:closed", async (event) => {
+      if (event.payload.showWelcome && !store.welcomeDismissed) {
+        // Small delay for smooth transition
+        setTimeout(() => {
+          store.openWelcomeModal();
+        }, 300);
+      }
+    }));
+
+    // Welcome dismissed event (from welcome window)
+    unlistenFns.push(await listen<{ permanent: boolean }>("welcome:dismissed", async (event) => {
+      if (event.payload.permanent) {
+        store.setWelcomeDismissed(true);
+        await saveSettings({ welcomeDismissed: true });
+      }
+    }));
+
     // Open settings event (from tray menu)
     unlistenFns.push(await listen("open:settings", () => {
-      console.log("[open:settings] Opening settings window from tray menu");
       openSettings();
     }));
 
@@ -325,11 +425,8 @@ export function useTauri() {
     unlistenFns.push(await listen("shortcut:triggered", async () => {
       // Prevent duplicate actions if already processing
       if (isActionInProgress) {
-        console.log("[shortcut] Action already in progress, ignoring");
         return;
       }
-
-      console.log("[shortcut] Triggered, status:", store.status);
 
       if (store.status === "listening") {
         isActionInProgress = true;
@@ -365,8 +462,12 @@ export function useTauri() {
     setShortcut,
     // Models
     loadWhisperModel,
+    loadWhisperModelWithOptions,
     isModelLoaded,
     getAvailableModels,
+    // System Health
+    checkSystemHealth,
+    getGpuStatus,
     // Permissions
     checkPermissions,
     requestMicrophonePermission,

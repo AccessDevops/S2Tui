@@ -413,3 +413,93 @@ pub fn get_available_models(app: AppHandle) -> Result<Vec<String>, String> {
 pub fn get_gpu_info() -> crate::whisper::GpuInfo {
     crate::whisper::GpuInfo::detect()
 }
+
+/// Check system health (GPU/Vulkan availability)
+#[tauri::command]
+pub fn check_system_health() -> crate::whisper::SystemHealthCheck {
+    crate::whisper::check_system_health()
+}
+
+/// GPU status information for the frontend
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GpuStatus {
+    /// Is GPU being used for transcription?
+    pub using_gpu: bool,
+    /// Current backend name
+    pub backend: String,
+    /// Was fallback to CPU used?
+    pub fallback_used: bool,
+}
+
+/// Get current GPU status
+#[tauri::command]
+pub fn get_gpu_status(state: State<'_, AppState>) -> GpuStatus {
+    GpuStatus {
+        using_gpu: state.whisper.is_using_gpu(),
+        backend: state.whisper.get_backend_name(),
+        fallback_used: state.whisper.was_fallback_used(),
+    }
+}
+
+/// Load Whisper model with explicit GPU/CPU control
+#[tauri::command]
+pub async fn load_whisper_model_with_options(
+    model: String,
+    force_cpu: bool,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<crate::whisper::ModelLoadResult, String> {
+    tracing::info!("Loading Whisper model: {} (force_cpu={})", model, force_cpu);
+
+    // Build model path
+    let filename = format!("ggml-{}.bin", model);
+    let models_dir = get_models_dir(&app)?;
+    let model_path = models_dir.join(&filename);
+
+    tracing::info!("Looking for model at: {}", model_path.display());
+
+    if !model_path.exists() {
+        tracing::error!("Model file not found: {}", model_path.display());
+        return Err(format!(
+            "Model not found: {}. Expected at: {}",
+            filename,
+            model_path.display()
+        ));
+    }
+
+    tracing::info!("Model file found, loading with options...");
+
+    // Load model with options in a blocking task
+    let whisper = state.whisper.clone();
+    let result =
+        tokio::task::spawn_blocking(move || whisper.load_model_with_options(model_path, force_cpu))
+            .await
+            .map_err(|e| format!("Task join error: {}", e))?
+            .map_err(|e| e.to_string())?;
+
+    // Update settings
+    state.update_settings(|s| {
+        s.model = model.clone();
+    });
+
+    // Emit events
+    app.emit("model:loaded", &model)
+        .map_err(|e| e.to_string())?;
+
+    // Emit GPU status event
+    if result.fallback_used {
+        app.emit("health:gpu-fallback", &result)
+            .map_err(|e| e.to_string())?;
+    }
+
+    tracing::info!(
+        "Whisper model loaded: {} (using_gpu={}, backend={}, fallback={})",
+        model,
+        result.using_gpu,
+        result.backend,
+        result.fallback_used
+    );
+
+    Ok(result)
+}

@@ -91,10 +91,7 @@ async function openSystemPreferences() {
     // So we just call it again
     await requestPermission();
   } else if (currentPlatform.value === "linux") {
-    // Linux: Show instructions in console/logs
-    console.log("Linux: Please check audio device permissions");
-    console.log("Run: groups | grep audio");
-    console.log("Run: arecord -l");
+    // Linux: Instructions are shown in the UI via platformInstructions
   }
 }
 

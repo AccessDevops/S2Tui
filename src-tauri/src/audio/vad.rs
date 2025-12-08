@@ -1,15 +1,3 @@
-#![allow(dead_code)]
-
-use thiserror::Error;
-
-#[derive(Error, Debug)]
-pub enum VadError {
-    #[error("VAD initialization failed: {0}")]
-    InitError(String),
-    #[error("VAD processing failed: {0}")]
-    ProcessError(String),
-}
-
 /// Voice Activity Detection result
 #[derive(Debug, Clone, Copy)]
 pub struct VadResult {
@@ -95,21 +83,6 @@ impl VoiceActivityDetector {
     pub fn reset(&mut self) {
         self.silence_frames = 0;
         self.in_speech = false;
-    }
-
-    /// Check if speech has ended (silence timeout)
-    pub fn speech_ended(&self) -> bool {
-        !self.in_speech && self.silence_frames >= self.silence_frames_threshold
-    }
-
-    /// Set speech detection threshold
-    pub fn set_threshold(&mut self, threshold: f32) {
-        self.speech_threshold = threshold.clamp(0.001, 0.5);
-    }
-
-    /// Set silence timeout in frames
-    pub fn set_silence_timeout(&mut self, frames: usize) {
-        self.silence_frames_threshold = frames.max(1);
     }
 }
 
