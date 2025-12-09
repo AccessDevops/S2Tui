@@ -1,0 +1,9 @@
+# Platform-specific cargo configuration
+
+# macOS: Disable Vulkan feature (uses Metal instead)
+[target.'cfg(target_os = "macos")']
+rustflags = ["--cfg", "macos_metal"]
+
+# macOS: Use only custom-protocol feature by default
+[build]
+target-applies-to-host = false

@@ -4,10 +4,11 @@ import { useAppStore, type Language, type ModelId } from "../stores/appStore";
 import { useTauri } from "../composables/useTauri";
 import { saveSettings, loadHistory, clearHistory as clearHistoryStore } from "../composables/useStore";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import ShortcutCapture from "../components/ShortcutCapture.vue";
 
 const store = useAppStore();
-const { setLanguage, setShortcut, loadWhisperModel, checkSystemHealth } = useTauri();
+const { setLanguage, setShortcut, loadWhisperModel, checkSystemHealth, checkPermissions } = useTauri();
 
 const shortcutError = ref<string | null>(null);
 
@@ -21,6 +22,7 @@ const gpuStatus = computed(() => store.gpuStatus);
 const activeTab = ref<"general" | "models" | "permissions" | "history" | "system">("general");
 const copiedId = ref<string | null>(null);
 const loadingModelId = ref<ModelId | null>(null);
+let unlistenHistory: UnlistenFn | null = null;
 
 function handleKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") {
@@ -30,11 +32,25 @@ function handleKeydown(e: KeyboardEvent) {
 
 onMounted(async () => {
   // Note: Do NOT call initListeners() here - it triggers initApp() which would
-  // re-open the welcome modal. Settings window shares state with main window via Pinia.
+  // re-open the welcome modal. Settings window has its own Pinia context (not shared).
 
   // Load history from persistence
   const savedHistory = await loadHistory();
   store.setHistory(savedHistory);
+
+  // Listen for history updates from other windows (e.g., main window after transcription)
+  unlistenHistory = await listen("history:updated", async () => {
+    // Reload history from persistence when notified of updates
+    const updatedHistory = await loadHistory();
+    store.setHistory(updatedHistory);
+  });
+
+  // Check permissions for the Permissions tab
+  try {
+    await checkPermissions();
+  } catch (error) {
+    console.error("Failed to check permissions:", error);
+  }
 
   // Load system health info for the System tab
   try {
@@ -49,6 +65,11 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener("keydown", handleKeydown);
+
+  // Clean up event listener
+  if (unlistenHistory) {
+    unlistenHistory();
+  }
 });
 
 // History handlers
@@ -162,9 +183,9 @@ function getBackendColor(backend: string | undefined): string {
     case "vulkan":
       return "bg-green-500/20 text-green-400";
     case "metal":
-      return "bg-blue-500/20 text-blue-400";
+      return "bg-green-500/20 text-green-400";
     case "cuda":
-      return "bg-purple-500/20 text-purple-400";
+      return "bg-green-500/20 text-green-400";
     case "cpu":
       return "bg-amber-500/20 text-amber-400";
     default:
@@ -509,9 +530,9 @@ function getBackendColor(backend: string | undefined): string {
             <div class="flex items-start gap-4">
               <div :class="[
                 'w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0',
-                systemHealth?.vulkanAvailable ? 'bg-green-500/20' : 'bg-amber-500/20'
+                (gpuStatus?.usingGpu || systemHealth?.vulkanAvailable || (systemHealth?.gpuBackend && systemHealth.gpuBackend !== 'cpu')) ? 'bg-green-500/20' : 'bg-amber-500/20'
               ]">
-                <svg class="w-6 h-6" :class="systemHealth?.vulkanAvailable ? 'text-green-400' : 'text-amber-400'" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg class="w-6 h-6" :class="(gpuStatus?.usingGpu || systemHealth?.vulkanAvailable || (systemHealth?.gpuBackend && systemHealth.gpuBackend !== 'cpu')) ? 'text-green-400' : 'text-amber-400'" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
                 </svg>
               </div>
@@ -527,10 +548,16 @@ function getBackendColor(backend: string | undefined): string {
                 </div>
                 <p class="text-white/50 text-sm mt-1">
                   <template v-if="systemHealth?.vulkanAvailable">
-                    Vulkan is available{{ systemHealth?.vulkanVersion ? ` (${systemHealth.vulkanVersion})` : '' }}
+                    Vulkan is available{{ systemHealth?.vulkanVersion ? ` (${systemHealth.vulkanVersion})` : '' }}. GPU acceleration is active.
+                  </template>
+                  <template v-else-if="systemHealth?.gpuBackend === 'metal'">
+                    Metal GPU is active. Your system is optimized for macOS.
+                  </template>
+                  <template v-else-if="systemHealth?.gpuBackend === 'cuda'">
+                    CUDA GPU is active. Your system is optimized for NVIDIA.
                   </template>
                   <template v-else>
-                    Vulkan is not available. Running in CPU mode.
+                    No GPU acceleration available. Running in CPU mode.
                   </template>
                 </p>
                 <div v-if="gpuStatus" class="mt-3 flex items-center gap-4 text-sm">
@@ -547,8 +574,8 @@ function getBackendColor(backend: string | undefined): string {
             </div>
           </div>
 
-          <!-- Vulkan Install Guide (shown if not available) -->
-          <div v-if="!systemHealth?.vulkanAvailable && systemHealth?.installGuide" class="space-y-4">
+          <!-- GPU Install Guide (shown only if no GPU backend available) -->
+          <div v-if="systemHealth?.gpuBackend === 'cpu' && systemHealth?.installGuide" class="space-y-4">
             <div class="p-5 rounded-xl bg-amber-500/10 border border-amber-500/20">
               <div class="flex items-start gap-3">
                 <svg class="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

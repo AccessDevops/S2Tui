@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Speech-to-Text UI - Local transcription with Whisper"
 authors = ["S2Tui"]
 edition = "2021"
-default-run = "s2tui-app"  # Default binary for `cargo run` and `tauri dev`
+default-run = "s2tui"  # Default binary for `cargo run` and `tauri dev`
 
 [lib]
 name = "s2tui_lib"
@@ -12,7 +12,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 
 # Main Tauri application binary
 [[bin]]
-name = "s2tui-app"
+name = "s2tui"
 path = "src/main.rs"
 
 [build-dependencies]
@@ -75,10 +75,6 @@ custom-protocol = ["tauri/custom-protocol"]
 # macOS always uses Metal (configured in target dependencies)
 # Vulkan is REQUIRED on Windows/Linux - app shows warning if not available
 gpu-vulkan = ["whisper-rs/vulkan"]    # Vulkan GPU acceleration (Windows/Linux)
-
-# Additional GPU backends (optional)
-gpu-cuda = ["whisper-rs/cuda"]        # NVIDIA CUDA (Windows/Linux)
-gpu-hipblas = ["whisper-rs/hipblas"]  # AMD ROCm (Linux only)
 
 [profile.release]
 panic = "abort"

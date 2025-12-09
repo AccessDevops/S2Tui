@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { SystemHealth } from "../stores/appStore";
 
 const systemHealth = ref<SystemHealth | null>(null);
 const isLoading = ref(true);
 const copiedCommand = ref<string | null>(null);
+const isRetrying = ref(false);
+const retryError = ref<string | null>(null);
 
 onMounted(async () => {
   try {
@@ -21,11 +24,37 @@ const installGuide = computed(() => systemHealth.value?.installGuide);
 const osInfo = computed(() => systemHealth.value?.osInfo);
 const isWindows = computed(() => osInfo.value?.platform === "windows");
 const isLinux = computed(() => osInfo.value?.platform === "linux");
+const isMacOS = computed(() => osInfo.value?.platform === "macos");
 
 async function retryAfterInstall() {
-  // Restart the application to re-check Vulkan availability
-  const { relaunch } = await import("@tauri-apps/plugin-process");
-  await relaunch();
+  isRetrying.value = true;
+  retryError.value = null;
+
+  try {
+    // Re-check system health without restarting the app
+    const newHealth = await invoke<SystemHealth>("check_system_health");
+    systemHealth.value = newHealth;
+
+    // Check if GPU is now available
+    const gpuAvailable = isMacOS.value
+      ? newHealth.gpuBackend === "metal"
+      : newHealth.vulkanAvailable;
+
+    if (gpuAvailable) {
+      // GPU is now available! Close this modal
+      getCurrentWebviewWindow().close();
+    } else {
+      // Still no GPU - show error message
+      retryError.value = isMacOS.value
+        ? "Metal is still not available. Please ensure you're running on real Mac hardware (not a VM) and restart the app."
+        : "Vulkan is still not available. Please install the GPU drivers and try again.";
+    }
+  } catch (error) {
+    retryError.value = "Failed to check system. Please try restarting the application.";
+    console.error("Retry failed:", error);
+  } finally {
+    isRetrying.value = false;
+  }
 }
 
 async function quitApp() {
@@ -71,8 +100,8 @@ async function copyCommand(command: string) {
           </svg>
         </div>
         <div>
-          <h1 class="text-white font-bold text-lg">Vulkan Required</h1>
-          <p class="text-red-400 text-sm">GPU drivers needed for transcription</p>
+          <h1 class="text-white font-bold text-lg">{{ isMacOS ? 'Metal GPU Required' : 'Vulkan Required' }}</h1>
+          <p class="text-red-400 text-sm">GPU {{ isMacOS ? 'acceleration' : 'drivers' }} needed for transcription</p>
         </div>
       </div>
 
@@ -83,23 +112,29 @@ async function copyCommand(command: string) {
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
           </svg>
           <div>
-            <p class="text-red-300 text-sm font-medium">Vulkan is required to run S2Tui</p>
+            <p class="text-red-300 text-sm font-medium">{{ isMacOS ? 'Metal GPU is required to run S2Tui' : 'Vulkan is required to run S2Tui' }}</p>
             <p class="text-red-200/70 text-xs mt-1">
-              Please install or update your GPU drivers to enable Vulkan support.
-              S2Tui uses GPU acceleration for fast speech-to-text transcription.
+              <template v-if="isMacOS">
+                Metal should be available by default on macOS 12.0+. If you're seeing this, you may be running S2Tui in a virtual machine, Hackintosh, or Safe Mode.
+                S2Tui uses Metal GPU acceleration for fast speech-to-text transcription (~4 seconds per audio).
+              </template>
+              <template v-else>
+                Please install or update your GPU drivers to enable Vulkan support.
+                S2Tui uses GPU acceleration for fast speech-to-text transcription.
+              </template>
             </p>
           </div>
         </div>
       </div>
 
-      <!-- Fallback when Vulkan is actually available (debug mode) -->
-      <div v-if="!installGuide && systemHealth?.vulkanAvailable" class="bg-green-500/10 rounded-xl p-4 border border-green-500/20">
+      <!-- Fallback when GPU is actually available (debug mode) -->
+      <div v-if="!installGuide && (systemHealth?.vulkanAvailable || isMacOS)" class="bg-green-500/10 rounded-xl p-4 border border-green-500/20">
         <div class="flex items-center gap-3">
           <svg class="w-6 h-6 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
           </svg>
           <div>
-            <p class="text-green-300 font-medium">Vulkan is already available!</p>
+            <p class="text-green-300 font-medium">{{ isMacOS ? 'Metal is already available!' : 'Vulkan is already available!' }}</p>
             <p class="text-green-200/70 text-sm mt-1">
               GPU acceleration is enabled. This modal is shown for debugging purposes.
             </p>
@@ -196,18 +231,32 @@ async function copyCommand(command: string) {
 
     <!-- Footer Actions (fixed) -->
     <div class="flex-shrink-0 p-4 border-t border-white/10 bg-gray-900 space-y-2">
+      <!-- Error message -->
+      <div v-if="retryError" class="p-3 rounded-lg bg-red-500/10 border border-red-500/20 flex items-start gap-2">
+        <svg class="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <p class="text-red-300 text-xs">{{ retryError }}</p>
+      </div>
+
       <button
         @click="retryAfterInstall"
-        class="w-full px-4 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+        :disabled="isRetrying"
+        class="w-full px-4 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
       >
-        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <svg v-if="!isRetrying" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
         </svg>
-        I've installed Vulkan - Retry
+        <svg v-else class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+        </svg>
+        {{ isRetrying ? 'Checking...' : (isMacOS ? "I've fixed the issue - Retry" : "I've installed Vulkan - Retry") }}
       </button>
       <button
         @click="quitApp"
-        class="w-full px-4 py-2 text-white/50 hover:text-white/70 hover:bg-white/5 rounded-lg transition-colors text-sm"
+        :disabled="isRetrying"
+        class="w-full px-4 py-2 text-white/50 hover:text-white/70 hover:bg-white/5 rounded-lg transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
       >
         Quit Application
       </button>

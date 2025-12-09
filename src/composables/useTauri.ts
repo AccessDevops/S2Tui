@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen, emit, type UnlistenFn } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useAppStore, type ModelId, type Language, type SystemHealth, type GpuStatus } from "../stores/appStore";
 import { loadSettings, saveSettings, addHistoryEntry, loadHistory } from "./useStore";
@@ -351,10 +351,17 @@ export function useTauri() {
       if (text.trim()) {
         store.addToHistory(text, model as any, transcribeDurationMs);
 
-        // Persist history in background (don't block copy notification)
-        addHistoryEntry(text, model, transcribeDurationMs).catch((error) => {
-          console.error("Failed to persist history:", error);
-        });
+        // Persist history first, then emit event (so Settings can read the updated file)
+        addHistoryEntry(text, model, transcribeDurationMs)
+          .then(() => {
+            // Emit event only after persistence is complete
+            emit("history:updated").catch((error) => {
+              console.error("Failed to emit history:updated event:", error);
+            });
+          })
+          .catch((error) => {
+            console.error("Failed to persist history:", error);
+          });
 
         // Copy to clipboard if autoCopy is enabled
         if (store.settings.autoCopy) {

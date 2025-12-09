@@ -12,6 +12,7 @@
   },
   "app": {
     "macOSPrivateApi": true,
+    "withGlobalTauri": false,
     "windows": [
       {
         "label": "main",
