@@ -78,10 +78,7 @@ pub fn detect_active_backend() -> GpuBackend {
         }
     }
 
-    #[cfg(not(any(
-        target_os = "macos",
-        any(target_os = "windows", target_os = "linux")
-    )))]
+    #[cfg(not(any(target_os = "macos", any(target_os = "windows", target_os = "linux"))))]
     tracing::info!("GPU: Using CPU-only processing");
 
     GpuBackend::Cpu
