@@ -298,8 +298,8 @@ jobs:
 
           mkdir -p "$distDir/models"
 
-          # Copy single binary
-          cp src-tauri/target/release/s2tui "$distDir/S2Tui"
+          # Copy single binary (mainBinaryName from tauri.conf.json)
+          cp src-tauri/target/release/S2Tui "$distDir/S2Tui"
           cp src-tauri/models/*.bin "$distDir/models/"
 
           chmod +x "$distDir/S2Tui"
@@ -319,7 +319,7 @@ jobs:
         with:
           name: linux-binary
           path: |
-            src-tauri/target/release/s2tui
+            src-tauri/target/release/S2Tui
             src-tauri/models/*.bin
           retention-days: 1
 
@@ -366,7 +366,7 @@ jobs:
           %install
           mkdir -p %{buildroot}/usr/bin
           mkdir -p %{buildroot}/usr/share/s2tui/models
-          install -m 755 %{_sourcedir}/s2tui %{buildroot}/usr/bin/S2Tui
+          install -m 755 %{_sourcedir}/S2Tui %{buildroot}/usr/bin/S2Tui
           install -m 644 %{_sourcedir}/*.bin %{buildroot}/usr/share/s2tui/models/
 
           %files
@@ -375,7 +375,7 @@ jobs:
           EOF
 
           # Copy files to SOURCES
-          cp artifacts/src-tauri/target/release/s2tui ~/rpmbuild/SOURCES/
+          cp artifacts/src-tauri/target/release/S2Tui ~/rpmbuild/SOURCES/
           cp artifacts/src-tauri/models/*.bin ~/rpmbuild/SOURCES/
 
       - name: Build RPM
