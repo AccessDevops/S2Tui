@@ -380,9 +380,9 @@ jobs:
           /usr/share/s2tui/models/*.bin
           EOF
 
-          # Copy files to SOURCES
-          cp artifacts/src-tauri/target/release/S2Tui ~/rpmbuild/SOURCES/
-          cp artifacts/src-tauri/models/*.bin ~/rpmbuild/SOURCES/
+          # Copy files to SOURCES (use find to handle varying artifact structure)
+          find artifacts -name "S2Tui" -type f -exec cp {} ~/rpmbuild/SOURCES/S2Tui \;
+          find artifacts -name "*.bin" -type f -exec cp {} ~/rpmbuild/SOURCES/ \;
 
       - name: Build RPM
         run: |
