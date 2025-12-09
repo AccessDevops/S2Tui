@@ -1,38 +1,28 @@
 # S2Tui
 
-Local, Free and Open Source speech-to-text application powered by Whisper. Your voice stays on your machine.
+Free, Local and Open Source speech-to-text application powered by Whisper. Your voice stays on your machine. Compatible with Windows, Linux and MacOS
 
 ## Features
 
-- **100% Local** - No internet required, no data leaves your computer
 - **100% Free** - For ever
+- **100% Local** - No internet required, no data leaves your computer
 - **Floating Overlay** - Minimal, always-on-top microphone button
-- **Auto-paste** - Text is inserted directly where your cursor is
+- **Auto-copy** - Text is inserted directly in your clipboard
 - **Global Shortcut** - Cmd/Ctrl+Shift+Space from anywhere
 - **Multi-language** - 12+ languages with auto-detection
 
 ## Installation
 
-### macOS
+Please check the [Release](https://github.com/AccessDevops/S2Tui/releases)
 
-1. Download `.dmg` from [Releases](../../releases)
-2. Drag S2Tui to Applications
-3. Right-click → Open on first launch
-4. Grant Microphone and Accessibility permissions
+## Requirement
 
-### Windows
-
-Download `.exe` installer or portable `.zip` from [Releases](../../releases)
-
-### Linux
-
-```bash
-# AppImage
-chmod +x S2Tui_*.AppImage && ./S2Tui_*.AppImage
-
-# Debian/Ubuntu
-sudo dpkg -i S2Tui_*.deb
-```
+|OS|Requirements|
+|:---|:---|
+|macOs|Must have [GPU Metal optimization](https://developer.apple.com/metal/) installed by default since 2012, fully compatible since 2021 with the M series|
+|Windows|Must have [Vulkan](https://www.vulkan.org/tools#vulkan-gpu-resources) installed by default with NVidia, AMD and Intel driver since 2012|
+|Linux debian and ubuntu |`sudo apt install mesa-vulkan-drivers nvidia-driver-550`|
+|Linux fedora |`sudo dnf install mesa-vulkan-drivers akmod-nvidia`|
 
 ## Usage
 
@@ -43,7 +33,7 @@ sudo dpkg -i S2Tui_*.deb
 
 **Shortcut:** `Cmd+Shift+Space` (macOS) or `Ctrl+Shift+Space` (Windows/Linux)
 
-## Development
+## Contributing and Development 
 
 ```bash
 # Install dependencies
