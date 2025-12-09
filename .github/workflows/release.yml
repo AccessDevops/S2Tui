@@ -80,10 +80,10 @@ jobs:
       matrix:
         platform:
           - name: macOS-arm64
-            os: macos-14
+            os: macos-latest
             target: aarch64-apple-darwin
           - name: macOS-x64
-            os: macos-13
+            os: macos-15-intel
             target: x86_64-apple-darwin
 
     runs-on: ${{ matrix.platform.os }}
