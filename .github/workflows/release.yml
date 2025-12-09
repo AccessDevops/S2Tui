@@ -342,6 +342,12 @@ jobs:
           name: linux-binary
           path: artifacts
 
+      - name: List artifact contents
+        run: |
+          echo "=== Artifact directory structure ==="
+          find artifacts -type f
+          echo "=== Done ==="
+
       - name: Setup RPM build environment
         run: |
           rpmdev-setuptree
