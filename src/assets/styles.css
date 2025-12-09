@@ -2,11 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Transparent background for overlay window */
+/* Base styles for full-height layouts */
 html, body, #app {
   background: transparent;
   margin: 0;
   padding: 0;
+  height: 100%;
   overflow: hidden;
 }
 

@@ -4,6 +4,7 @@
 [target.'cfg(target_os = "macos")']
 rustflags = ["--cfg", "macos_metal"]
 
-# macOS: Use only custom-protocol feature by default
-[build]
-target-applies-to-host = false
+# Windows: Use Ninja for CMake (required for newer Visual Studio versions)
+[target.'cfg(target_os = "windows")']
+[target.'cfg(target_os = "windows")'.env]
+CMAKE_GENERATOR = "Ninja"

@@ -8,7 +8,10 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "tauri:dev:macos": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri dev -- --no-default-features --features custom-protocol"
+    "tauri:dev:windows": "tauri dev --features gpu-vulkan",
+    "tauri:dev:macos": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri dev -- --no-default-features --features custom-protocol",
+    "tauri:build:windows": "scripts\\build-windows.cmd",
+    "tauri:build:windows:skip": "scripts\\build-windows.cmd --skip-build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

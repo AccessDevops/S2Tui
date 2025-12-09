@@ -48,7 +48,7 @@ jobs:
             | **macOS (Apple Silicon)** | `.dmg` | - |
             | **macOS (Intel)** | `.dmg` | - |
             | **Windows** | `.exe` (NSIS), `.msi` | `.zip` (portable) |
-            | **Linux** | `.AppImage`, `.deb`, `.rpm` | - |
+            | **Linux** | `.deb`, `.rpm` | `.tar.gz` (portable) |
 
             ## Installation Notes
 
@@ -63,9 +63,9 @@ jobs:
             - **Portable**: Download `*_portable.zip`, extract and run (no installation)
 
             ### Linux
-            - **AppImage**: Make executable with `chmod +x` and run
             - **Debian/Ubuntu**: Install with `sudo dpkg -i s2tui_*.deb`
             - **Fedora/RHEL/CentOS**: Install with `sudo rpm -ivh s2tui-*.rpm`
+            - **Portable**: Extract `.tar.gz` and run
           draft: true
           prerelease: false
         env:
@@ -277,11 +277,12 @@ jobs:
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
+        timeout-minutes: 30
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
-          args: --bundles appimage,deb,rpm --features gpu-vulkan
+          args: --bundles deb,rpm --features gpu-vulkan
 
       - name: Create portable tarball
         run: |

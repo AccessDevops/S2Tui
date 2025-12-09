@@ -4,21 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-S2Tui is a local Speech-to-Text desktop application for macOS. It provides a floating overlay with a microphone button that captures audio, transcribes it using Whisper.cpp locally, and can auto-paste the text into any application.
+S2Tui is a local Speech-to-Text desktop application for Windows, macOS, and Linux. It provides a floating overlay with a microphone button that captures audio, transcribes it using Whisper.cpp locally with GPU acceleration, and can auto-paste the text into any application.
 
 ## Tech Stack
 
 - **Frontend**: Vue 3 + TypeScript + Tailwind CSS + Vite + Pinia
 - **Backend**: Tauri 2 + Rust
 - **Speech Recognition**: whisper-rs (Whisper.cpp Rust bindings)
+- **GPU Acceleration**: Vulkan (Windows/Linux), Metal (macOS)
 - **Audio Capture**: cpal
 - **macOS Integration**: objc2, core-foundation (for accessibility API, window management)
 
 ## Development Commands
 
 ```bash
-# Start development mode (frontend + backend hot-reload)
-npm run tauri dev
+# Start development mode - use the appropriate command for your OS:
+npm run tauri:dev:windows  # Windows (with Vulkan GPU support)
+npm run tauri:dev:macos    # macOS (with Metal GPU support)
 
 # Build for production
 npm run tauri build
@@ -91,13 +93,23 @@ curl -L -o src-tauri/models/ggml-small.bin \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin
 ```
 
-## macOS Requirements
+## Platform Requirements
 
+### Windows
+- **GPU drivers with Vulkan support**: NVIDIA, AMD, or Intel drivers that support Vulkan
+- **Ninja build tool**: Required for CMake (auto-configured in `.cargo/config.toml`)
+
+### macOS
 - **Microphone permission**: Required for audio capture
 - **Accessibility permission**: Required for text insertion via AXUIElement
+
+### Linux
+- **Vulkan drivers**: Install via package manager (mesa-vulkan-drivers, nvidia-vulkan-icd, etc.)
+- **Microphone access**: May require PulseAudio/PipeWire configuration
 
 ## Build Prerequisites
 
 - Rust toolchain (via rustup)
 - Node.js 18+
+- Ninja (Windows - for CMake builds)
 - Xcode Command Line Tools (macOS)
