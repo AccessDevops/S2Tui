@@ -1,14 +1,7 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version to release (e.g., v0.1.0)'
-        required: true
+  workflow_dispatch:  # Manual trigger only - version read from package.json
 
 permissions:
   contents: write
@@ -21,13 +14,27 @@ jobs:
       release_id: ${{ steps.create_release.outputs.id }}
       version: ${{ steps.get_version.outputs.version }}
     steps:
-      - name: Get version
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get version from package.json
         id: get_version
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=v${VERSION}" >> $GITHUB_OUTPUT
+          echo "Version: v${VERSION}"
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Check if tag already exists
+          if git rev-parse "${{ steps.get_version.outputs.version }}" >/dev/null 2>&1; then
+            echo "Tag ${{ steps.get_version.outputs.version }} already exists, skipping tag creation"
           else
-            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+            git tag -a "${{ steps.get_version.outputs.version }}" -m "Release ${{ steps.get_version.outputs.version }}"
+            git push origin "${{ steps.get_version.outputs.version }}"
           fi
 
       - name: Create Release
@@ -282,7 +289,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
-          args: --bundles deb,rpm --features gpu-vulkan
+          args: --bundles deb --features gpu-vulkan
 
       - name: Create portable tarball
         run: |
@@ -307,9 +314,86 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Upload build artifacts for RPM
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-binary
+          path: |
+            src-tauri/target/release/s2tui-app
+            src-tauri/models/*.bin
+          retention-days: 1
+
+  # RPM build - separate job with Fedora container for faster native rpmbuild
+  build-rpm:
+    name: Build RPM (Fedora)
+    needs: [create-release, build-linux]
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:40
+
+    steps:
+      - name: Install dependencies
+        run: |
+          dnf install -y rpm-build rpmdevtools
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-binary
+          path: artifacts
+
+      - name: Setup RPM build environment
+        run: |
+          rpmdev-setuptree
+          version="${{ needs.create-release.outputs.version }}"
+          version_num="${version#v}"
+
+          # Create spec file
+          cat > ~/rpmbuild/SPECS/s2tui.spec << EOF
+          Name:           s2tui
+          Version:        ${version_num}
+          Release:        1%{?dist}
+          Summary:        Local Speech-to-Text with GPU acceleration
+          License:        MIT
+          URL:            https://github.com/${{ github.repository }}
+          BuildArch:      x86_64
+
+          Requires:       vulkan-loader
+
+          %description
+          S2Tui is a local Speech-to-Text desktop application with Vulkan GPU acceleration.
+
+          %install
+          mkdir -p %{buildroot}/usr/bin
+          mkdir -p %{buildroot}/usr/share/s2tui/models
+          install -m 755 %{_sourcedir}/s2tui-app %{buildroot}/usr/bin/S2Tui
+          install -m 644 %{_sourcedir}/*.bin %{buildroot}/usr/share/s2tui/models/
+
+          %files
+          /usr/bin/S2Tui
+          /usr/share/s2tui/models/*.bin
+          EOF
+
+          # Copy files to SOURCES
+          cp artifacts/src-tauri/target/release/s2tui-app ~/rpmbuild/SOURCES/
+          cp artifacts/src-tauri/models/*.bin ~/rpmbuild/SOURCES/
+
+      - name: Build RPM
+        run: |
+          rpmbuild -bb ~/rpmbuild/SPECS/s2tui.spec
+          cp ~/rpmbuild/RPMS/x86_64/*.rpm ./
+
+      - name: Upload RPM to release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.create-release.outputs.version }}
+          files: "*.rpm"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   publish-release:
     name: Publish Release
-    needs: [create-release, build-macos, build-linux]  # build-windows disabled (done manually)
+    needs: [create-release, build-macos, build-linux, build-rpm]  # build-windows disabled (done manually)
     runs-on: ubuntu-latest
     steps:
       - name: Publish release
