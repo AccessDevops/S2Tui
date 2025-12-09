@@ -28,10 +28,6 @@ pub enum GpuBackend {
     Cpu,
     /// Apple Metal (macOS)
     Metal,
-    /// NVIDIA CUDA (Windows/Linux)
-    Cuda,
-    /// AMD ROCm/HIPBlas (Linux)
-    HipBlas,
     /// Vulkan cross-platform GPU
     Vulkan,
 }
@@ -42,8 +38,6 @@ impl GpuBackend {
         match self {
             GpuBackend::Cpu => "CPU",
             GpuBackend::Metal => "Metal",
-            GpuBackend::Cuda => "CUDA",
-            GpuBackend::HipBlas => "HIPBlas (ROCm)",
             GpuBackend::Vulkan => "Vulkan",
         }
     }
@@ -53,8 +47,6 @@ impl GpuBackend {
         match self {
             GpuBackend::Cpu => "CPU-only processing (no GPU acceleration)",
             GpuBackend::Metal => "Apple Metal GPU acceleration (macOS)",
-            GpuBackend::Cuda => "NVIDIA CUDA GPU acceleration",
-            GpuBackend::HipBlas => "AMD ROCm/HIPBlas GPU acceleration (Linux)",
             GpuBackend::Vulkan => "Vulkan cross-platform GPU acceleration",
         }
     }
@@ -70,26 +62,6 @@ pub fn detect_active_backend() -> GpuBackend {
     {
         tracing::info!("GPU: Metal backend enabled (macOS default)");
         return GpuBackend::Metal;
-    }
-
-    #[cfg(feature = "gpu-cuda")]
-    {
-        if is_cuda_available() {
-            tracing::info!("GPU: CUDA backend enabled and available");
-            return GpuBackend::Cuda;
-        } else {
-            tracing::warn!("GPU: CUDA backend enabled but not available, falling back to CPU");
-        }
-    }
-
-    #[cfg(feature = "gpu-hipblas")]
-    {
-        if is_hipblas_available() {
-            tracing::info!("GPU: HIPBlas backend enabled and available");
-            return GpuBackend::HipBlas;
-        } else {
-            tracing::warn!("GPU: HIPBlas backend enabled but not available, falling back to CPU");
-        }
     }
 
     // Vulkan for Windows/Linux (only when gpu-vulkan feature is enabled)
@@ -108,8 +80,6 @@ pub fn detect_active_backend() -> GpuBackend {
 
     #[cfg(not(any(
         target_os = "macos",
-        feature = "gpu-cuda",
-        feature = "gpu-hipblas",
         any(target_os = "windows", target_os = "linux")
     )))]
     tracing::info!("GPU: Using CPU-only processing");
@@ -128,20 +98,6 @@ pub fn get_compiled_backends() -> Vec<GpuBackend> {
         b
     };
 
-    #[cfg(feature = "gpu-cuda")]
-    let backends = {
-        let mut b = backends;
-        b.push(GpuBackend::Cuda);
-        b
-    };
-
-    #[cfg(feature = "gpu-hipblas")]
-    let backends = {
-        let mut b = backends;
-        b.push(GpuBackend::HipBlas);
-        b
-    };
-
     // Vulkan compiled for Windows/Linux only when gpu-vulkan feature is enabled
     #[cfg(all(
         feature = "gpu-vulkan",
@@ -154,75 +110,6 @@ pub fn get_compiled_backends() -> Vec<GpuBackend> {
     };
 
     backends
-}
-
-/// Check if NVIDIA CUDA is available on the system
-#[cfg(feature = "gpu-cuda")]
-fn is_cuda_available() -> bool {
-    use std::process::Command;
-
-    // Try nvidia-smi to detect NVIDIA GPU
-    match Command::new("nvidia-smi").output() {
-        Ok(output) => {
-            let available = output.status.success();
-            if available {
-                tracing::debug!("CUDA: nvidia-smi detected GPU");
-            } else {
-                tracing::debug!("CUDA: nvidia-smi failed (no GPU or driver issue)");
-            }
-            available
-        }
-        Err(e) => {
-            tracing::debug!("CUDA: nvidia-smi not found: {}", e);
-            false
-        }
-    }
-}
-
-#[cfg(not(feature = "gpu-cuda"))]
-#[allow(dead_code)]
-fn is_cuda_available() -> bool {
-    false
-}
-
-/// Check if AMD ROCm/HIPBlas is available on the system
-#[cfg(feature = "gpu-hipblas")]
-fn is_hipblas_available() -> bool {
-    use std::path::Path;
-    use std::process::Command;
-
-    // Check for ROCm installation directory
-    if Path::new("/opt/rocm").exists() {
-        tracing::debug!("HIPBlas: /opt/rocm directory found");
-
-        // Try rocminfo to confirm
-        match Command::new("rocminfo").output() {
-            Ok(output) => {
-                let available = output.status.success();
-                if available {
-                    tracing::debug!("HIPBlas: rocminfo confirmed GPU");
-                } else {
-                    tracing::debug!("HIPBlas: rocminfo failed");
-                }
-                return available;
-            }
-            Err(e) => {
-                tracing::debug!("HIPBlas: rocminfo not found: {}", e);
-            }
-        }
-
-        // ROCm directory exists, assume available
-        return true;
-    }
-
-    tracing::debug!("HIPBlas: ROCm not detected");
-    false
-}
-
-#[cfg(not(feature = "gpu-hipblas"))]
-#[allow(dead_code)]
-fn is_hipblas_available() -> bool {
-    false
 }
 
 /// Check if Vulkan is available on the system (cached result)
@@ -542,8 +429,8 @@ fn detect_os_version() -> Option<String> {
         // Lire VERSION_ID depuis /etc/os-release
         if let Ok(content) = std::fs::read_to_string("/etc/os-release") {
             for line in content.lines() {
-                if line.starts_with("VERSION_ID=") {
-                    return Some(line[11..].trim_matches('"').to_string());
+                if let Some(version) = line.strip_prefix("VERSION_ID=") {
+                    return Some(version.trim_matches('"').to_string());
                 }
             }
         }
@@ -572,8 +459,8 @@ fn detect_linux_distribution() -> Option<String> {
     // 1. Lire /etc/os-release (méthode standard)
     if let Ok(content) = std::fs::read_to_string("/etc/os-release") {
         for line in content.lines() {
-            if line.starts_with("ID=") {
-                let id = line[3..].trim_matches('"').to_lowercase();
+            if let Some(id_value) = line.strip_prefix("ID=") {
+                let id = id_value.trim_matches('"').to_lowercase();
                 return Some(id);
             }
         }

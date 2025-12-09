@@ -281,7 +281,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
-          args: --bundles appimage,deb,rpm
+          args: --bundles appimage,deb,rpm --features gpu-vulkan
 
       - name: Create portable tarball
         run: |

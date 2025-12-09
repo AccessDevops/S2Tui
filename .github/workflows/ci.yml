@@ -128,7 +128,12 @@ jobs:
         shell: bash
         env:
           CMAKE_GENERATOR: Ninja
-        run: cargo check --target ${{ matrix.platform.target }}
+        run: |
+          if [ "${{ matrix.platform.os }}" = "ubuntu-22.04" ]; then
+            cargo check --target ${{ matrix.platform.target }} --features gpu-vulkan
+          else
+            cargo check --target ${{ matrix.platform.target }}
+          fi
 
   lint:
     name: Lint
@@ -195,4 +200,4 @@ jobs:
 
       - name: Rust clippy
         working-directory: src-tauri
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --features gpu-vulkan -- -D warnings

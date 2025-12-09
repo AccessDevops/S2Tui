@@ -68,12 +68,12 @@ block2 = "0.6"
 core-foundation = "0.10"
 
 [features]
-default = ["custom-protocol", "gpu-vulkan"]  # GPU enabled by default
+default = ["custom-protocol"]  # macOS uses Metal by default (configured in target dependencies)
 custom-protocol = ["tauri/custom-protocol"]
 
 # GPU acceleration features for Windows/Linux
 # macOS always uses Metal (configured in target dependencies)
-# Vulkan is REQUIRED on Windows/Linux - app shows warning if not available
+# Vulkan should be enabled for Windows/Linux builds
 gpu-vulkan = ["whisper-rs/vulkan"]    # Vulkan GPU acceleration (Windows/Linux)
 
 [profile.release]
