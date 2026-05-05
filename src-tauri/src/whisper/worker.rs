@@ -231,9 +231,10 @@ impl WhisperEngine {
             .collect();
 
         tracing::info!(
-            "Transcribing {} samples ({:.2}s)",
+            "Transcribing {} samples ({:.2}s) — language: {}",
             samples.len(),
-            samples.len() as f32 / 16000.0
+            samples.len() as f32 / 16000.0,
+            self.config.language.as_deref().unwrap_or("auto-detect")
         );
 
         // Create transcription parameters
@@ -252,6 +253,14 @@ impl WhisperEngine {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
+
+        // Anti-hallucination tuning. Whisper is known to insert plausible but
+        // unspoken words on silence or low-energy audio. Deterministic decoding
+        // and a no-speech threshold reduce that significantly.
+        params.set_temperature(0.0);
+        params.set_temperature_inc(0.0);
+        params.set_no_speech_thold(0.6);
+        params.set_suppress_blank(true);
 
         // Create a new state for this transcription
         let mut state = ctx.create_state().map_err(|e| {

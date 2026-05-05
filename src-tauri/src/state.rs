@@ -33,6 +33,28 @@ pub enum Language {
     Pl,
 }
 
+impl Language {
+    /// ISO 639-1 code expected by whisper-rs. `None` means auto-detect.
+    pub fn to_whisper_code(self) -> Option<&'static str> {
+        match self {
+            Language::Auto => None,
+            Language::En => Some("en"),
+            Language::Fr => Some("fr"),
+            Language::Es => Some("es"),
+            Language::De => Some("de"),
+            Language::It => Some("it"),
+            Language::Pt => Some("pt"),
+            Language::Nl => Some("nl"),
+            Language::Ja => Some("ja"),
+            Language::Zh => Some("zh"),
+            Language::Ko => Some("ko"),
+            Language::Ar => Some("ar"),
+            Language::Hi => Some("hi"),
+            Language::Pl => Some("pl"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub language: Language,
@@ -130,5 +152,23 @@ impl AppState {
 impl Default for AppState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_maps_to_none() {
+        assert_eq!(Language::Auto.to_whisper_code(), None);
+    }
+
+    #[test]
+    fn languages_map_to_iso_codes() {
+        assert_eq!(Language::En.to_whisper_code(), Some("en"));
+        assert_eq!(Language::Fr.to_whisper_code(), Some("fr"));
+        assert_eq!(Language::Ja.to_whisper_code(), Some("ja"));
+        assert_eq!(Language::Pl.to_whisper_code(), Some("pl"));
     }
 }

@@ -678,7 +678,7 @@ mod tests {
     fn test_backend_names() {
         assert_eq!(GpuBackend::Cpu.name(), "CPU");
         assert_eq!(GpuBackend::Metal.name(), "Metal");
-        assert_eq!(GpuBackend::Cuda.name(), "CUDA");
+        assert_eq!(GpuBackend::Vulkan.name(), "Vulkan");
     }
 
     #[test]

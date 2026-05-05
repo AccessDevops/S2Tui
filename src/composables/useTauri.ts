@@ -245,6 +245,14 @@ export function useTauri() {
         shortcut: persisted.shortcut,
       });
 
+      // Push the persisted language to the backend. Without this, Whisper stays
+      // on its default (auto-detect) until the user re-selects the language.
+      try {
+        await setLanguage(persisted.language);
+      } catch (err) {
+        console.error("Failed to sync persisted language to backend:", err);
+      }
+
       // Load persisted system health settings
       store.setVulkanWarningDismissed(persisted.vulkanWarningDismissed ?? false);
       store.setWelcomeDismissed(persisted.welcomeDismissed ?? false);

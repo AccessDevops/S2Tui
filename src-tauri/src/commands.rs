@@ -210,6 +210,20 @@ pub async fn load_whisper_model(
         s.model = model.clone();
     });
 
+    // Re-apply the current language selection to the whisper engine after a
+    // model load, so the engine config stays in sync with user settings even
+    // if set_language ran before the model was ready.
+    let whisper_code = state
+        .get_settings()
+        .language
+        .to_whisper_code()
+        .map(String::from);
+    state.whisper.set_language(whisper_code.clone());
+    tracing::info!(
+        "Whisper language re-applied after model load: {}",
+        whisper_code.as_deref().unwrap_or("auto-detect")
+    );
+
     app.emit("model:loaded", &model)
         .map_err(|e| e.to_string())?;
 
@@ -279,6 +293,16 @@ pub fn set_language(lang: String, state: State<'_, AppState>) -> Result<(), Stri
     state.update_settings(|s| {
         s.language = language;
     });
+
+    // Propagate the selection to the whisper engine. Without this, the engine
+    // keeps its default (`None` = auto-detect) regardless of the UI choice.
+    let whisper_code = language.to_whisper_code().map(String::from);
+    state.whisper.set_language(whisper_code.clone());
+    tracing::info!(
+        "Whisper language set to: {}",
+        whisper_code.as_deref().unwrap_or("auto-detect")
+    );
+
     Ok(())
 }
 
@@ -482,6 +506,20 @@ pub async fn load_whisper_model_with_options(
     state.update_settings(|s| {
         s.model = model.clone();
     });
+
+    // Re-apply the current language selection to the whisper engine after a
+    // model load, so the engine config stays in sync with user settings even
+    // if set_language ran before the model was ready.
+    let whisper_code = state
+        .get_settings()
+        .language
+        .to_whisper_code()
+        .map(String::from);
+    state.whisper.set_language(whisper_code.clone());
+    tracing::info!(
+        "Whisper language re-applied after model load: {}",
+        whisper_code.as_deref().unwrap_or("auto-detect")
+    );
 
     // Emit events
     app.emit("model:loaded", &model)
