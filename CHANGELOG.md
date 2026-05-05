@@ -16,6 +16,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Text insertion now works on Windows and Linux via clipboard + Ctrl+V simulation
 
+## [0.1.5] - 2026-05-05
+
+### Fixed
+- Selected language is now actually honored by the Whisper engine
+  (previously the UI value was saved but never propagated to the
+  transcription engine, which always auto-detected). Fixes #1.
+- Persisted language is re-synced to the backend on every app start.
+- `cargo test` no longer fails because of the obsolete `GpuBackend::Cuda`
+  assertion left over from the CUDA removal.
+
+### Changed
+- Whisper transcription tuned to reduce hallucinations on silence and
+  low-energy audio: deterministic decoding (`temperature = 0`,
+  `temperature_inc = 0`), `no_speech_thold = 0.6`, `suppress_blank = true`.
+- `transcribe()` now logs the active language for diagnostics.
+
 ## [0.1.0] - 2025-01-XX
 
 ### Added
