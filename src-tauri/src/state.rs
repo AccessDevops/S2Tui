@@ -2,6 +2,7 @@ use crate::audio::{AudioCapture, VoiceActivityDetector};
 use crate::whisper::WhisperWorker;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,6 +54,67 @@ impl Language {
             Language::Pl => Some("pl"),
         }
     }
+
+    /// All language variants (for UI listings and defaults).
+    pub fn all() -> Vec<Language> {
+        vec![
+            Language::Auto,
+            Language::En,
+            Language::Fr,
+            Language::Es,
+            Language::De,
+            Language::It,
+            Language::Pt,
+            Language::Nl,
+            Language::Ja,
+            Language::Zh,
+            Language::Ko,
+            Language::Ar,
+            Language::Hi,
+            Language::Pl,
+        ]
+    }
+
+    /// Stable serialization code (matches the lowercase serde tag, including "auto").
+    pub fn to_code(self) -> &'static str {
+        match self {
+            Language::Auto => "auto",
+            Language::En => "en",
+            Language::Fr => "fr",
+            Language::Es => "es",
+            Language::De => "de",
+            Language::It => "it",
+            Language::Pt => "pt",
+            Language::Nl => "nl",
+            Language::Ja => "ja",
+            Language::Zh => "zh",
+            Language::Ko => "ko",
+            Language::Ar => "ar",
+            Language::Hi => "hi",
+            Language::Pl => "pl",
+        }
+    }
+
+    /// Parse a language from its serialization code; returns `None` if unknown.
+    pub fn from_code(code: &str) -> Option<Language> {
+        match code {
+            "auto" => Some(Language::Auto),
+            "en" => Some(Language::En),
+            "fr" => Some(Language::Fr),
+            "es" => Some(Language::Es),
+            "de" => Some(Language::De),
+            "it" => Some(Language::It),
+            "pt" => Some(Language::Pt),
+            "nl" => Some(Language::Nl),
+            "ja" => Some(Language::Ja),
+            "zh" => Some(Language::Zh),
+            "ko" => Some(Language::Ko),
+            "ar" => Some(Language::Ar),
+            "hi" => Some(Language::Hi),
+            "pl" => Some(Language::Pl),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +122,20 @@ pub struct Settings {
     pub language: Language,
     pub model: String,
     pub shortcut: String,
+    /// Optional shortcut to cycle through favorite languages. Empty = unbound.
+    #[serde(default)]
+    pub language_toggle_shortcut: String,
+    /// Optional shortcut to cycle through models compatible with current language.
+    #[serde(default)]
+    pub model_toggle_shortcut: String,
+    /// Languages the user wants to cycle through with the language shortcut.
+    #[serde(default = "Language::all")]
+    pub favorite_languages: Vec<Language>,
+    /// Per-model language whitelist. Key = model name (e.g. "large-v3-turbo").
+    /// A model that's missing from this map is treated as supporting every
+    /// favorite language (friendly default for newly downloaded models).
+    #[serde(default)]
+    pub model_languages: HashMap<String, Vec<Language>>,
 }
 
 impl Default for Settings {
@@ -68,6 +144,10 @@ impl Default for Settings {
             language: Language::Auto,
             model: "large-v3-turbo".to_string(),
             shortcut: "CommandOrControl+Shift+Space".to_string(),
+            language_toggle_shortcut: String::new(),
+            model_toggle_shortcut: String::new(),
+            favorite_languages: Language::all(),
+            model_languages: HashMap::new(),
         }
     }
 }
@@ -170,5 +250,25 @@ mod tests {
         assert_eq!(Language::Fr.to_whisper_code(), Some("fr"));
         assert_eq!(Language::Ja.to_whisper_code(), Some("ja"));
         assert_eq!(Language::Pl.to_whisper_code(), Some("pl"));
+    }
+
+    #[test]
+    fn all_languages_count() {
+        // 14 = Auto + 13 supported language codes — keep this test in sync if more
+        // languages are added so the UI listings stay coherent.
+        assert_eq!(Language::all().len(), 14);
+    }
+
+    #[test]
+    fn to_code_round_trips_via_from_code() {
+        for lang in Language::all() {
+            assert_eq!(Language::from_code(lang.to_code()), Some(lang));
+        }
+    }
+
+    #[test]
+    fn from_code_rejects_unknown() {
+        assert_eq!(Language::from_code("zz"), None);
+        assert_eq!(Language::from_code(""), None);
     }
 }

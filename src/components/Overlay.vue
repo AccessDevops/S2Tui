@@ -86,6 +86,27 @@ function handleMouseDown(event: MouseEvent) {
         </svg>
       </button>
 
+      <!-- Toggle Notification (rendered above the mic button so it doesn't obscure it).
+           The main overlay window is only 90x100px, so the toast must wrap onto
+           multiple lines for long messages instead of getting clipped. -->
+      <Transition
+        enter-active-class="transition-all duration-300 ease-out"
+        enter-from-class="opacity-0 -translate-y-2"
+        enter-to-class="opacity-100 translate-y-0"
+        leave-active-class="transition-all duration-200 ease-in"
+        leave-from-class="opacity-100 translate-y-0"
+        leave-to-class="opacity-0 -translate-y-2"
+      >
+        <div
+          v-if="store.toggleNotification.visible"
+          class="absolute -top-2 left-1/2 -translate-x-1/2 z-30"
+        >
+          <div class="px-1.5 py-1 rounded-md bg-blue-500/95 text-white text-[10px] font-medium leading-tight text-center shadow-lg backdrop-blur-sm max-w-[84px] break-words">
+            {{ store.toggleNotification.text }}
+          </div>
+        </div>
+      </Transition>
+
       <!-- Copy Notification Popover (centered on mic button) -->
       <Transition
         enter-active-class="transition-all duration-300 ease-out"

@@ -1,7 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, emit, type UnlistenFn } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { useAppStore, type ModelId, type Language, type SystemHealth, type GpuStatus } from "../stores/appStore";
+import {
+  useAppStore,
+  type ModelId,
+  type Language,
+  type SystemHealth,
+  type GpuStatus,
+  LANGUAGE_DISPLAY_NAMES,
+} from "../stores/appStore";
 import { loadSettings, saveSettings, addHistoryEntry, loadHistory } from "./useStore";
 
 // Platform-aware settings window opener
@@ -66,6 +73,18 @@ interface TranscriptPayload {
 export function useTauri() {
   const store = useAppStore();
 
+  // Each Tauri window owns its own Pinia store, so a setter that mutates
+  // settings in one window does not reach the other. Broadcast a Tauri event
+  // and have every window reload from persistence — same pattern we already
+  // use for `history:updated`.
+  async function broadcastSettingsUpdate(): Promise<void> {
+    try {
+      await emit("settings:updated", null);
+    } catch (err) {
+      console.error("Failed to broadcast settings update:", err);
+    }
+  }
+
   // Commands - Audio
   async function startListen(mode: ListenMode = "toggle") {
     try {
@@ -92,10 +111,19 @@ export function useTauri() {
     }
   }
 
-  // Commands - Settings
+  // Commands - Settings.
+  // Order matters: persist to disk BEFORE broadcasting `settings:updated`.
+  // The cross-window listener reads `loadSettings()` from disk, so if we
+  // broadcast first the listener would see the previous on-disk value and
+  // overwrite the in-memory store with stale state. This race manifested
+  // as the language toggle "needing two presses" because every other press
+  // was instantly reverted by our own broadcast handler.
   async function setModel(name: ModelId) {
     try {
       await invoke("set_model", { name });
+      store.updateSettings({ model: name });
+      await saveSettings({ model: name });
+      await broadcastSettingsUpdate();
     } catch (error) {
       console.error("Failed to set model:", error);
     }
@@ -104,6 +132,9 @@ export function useTauri() {
   async function setLanguage(lang: Language) {
     try {
       await invoke("set_language", { lang });
+      store.updateSettings({ language: lang });
+      await saveSettings({ language: lang });
+      await broadcastSettingsUpdate();
     } catch (error) {
       console.error("Failed to set language:", error);
     }
@@ -114,8 +145,58 @@ export function useTauri() {
       await invoke("set_shortcut", { shortcut });
       store.updateSettings({ shortcut });
       await saveSettings({ shortcut });
+      await broadcastSettingsUpdate();
     } catch (error) {
       console.error("Failed to set shortcut:", error);
+      throw error;
+    }
+  }
+
+  async function setLanguageToggleShortcut(shortcut: string): Promise<void> {
+    try {
+      await invoke("set_language_toggle_shortcut", { shortcut });
+      store.updateSettings({ languageToggleShortcut: shortcut });
+      await saveSettings({ languageToggleShortcut: shortcut });
+      await broadcastSettingsUpdate();
+    } catch (error) {
+      console.error("Failed to set language toggle shortcut:", error);
+      throw error;
+    }
+  }
+
+  async function setModelToggleShortcut(shortcut: string): Promise<void> {
+    try {
+      await invoke("set_model_toggle_shortcut", { shortcut });
+      store.updateSettings({ modelToggleShortcut: shortcut });
+      await saveSettings({ modelToggleShortcut: shortcut });
+      await broadcastSettingsUpdate();
+    } catch (error) {
+      console.error("Failed to set model toggle shortcut:", error);
+      throw error;
+    }
+  }
+
+  async function setFavoriteLanguages(languages: Language[]): Promise<void> {
+    try {
+      await invoke("set_favorite_languages", { languages });
+      store.updateSettings({ favoriteLanguages: languages });
+      await saveSettings({ favoriteLanguages: languages });
+      await broadcastSettingsUpdate();
+    } catch (error) {
+      console.error("Failed to set favorite languages:", error);
+      throw error;
+    }
+  }
+
+  async function setModelLanguages(model: string, languages: Language[]): Promise<void> {
+    try {
+      await invoke("set_model_languages", { model, languages });
+      const next = { ...store.settings.modelLanguages, [model]: languages };
+      store.updateSettings({ modelLanguages: next });
+      await saveSettings({ modelLanguages: next });
+      await broadcastSettingsUpdate();
+    } catch (error) {
+      console.error("Failed to set model languages:", error);
       throw error;
     }
   }
@@ -126,6 +207,7 @@ export function useTauri() {
       await invoke("load_whisper_model", { model });
       store.updateSettings({ model });
       await saveSettings({ model });
+      await broadcastSettingsUpdate();
     } catch (error) {
       console.error("Failed to load whisper model:", error);
       throw error;
@@ -223,6 +305,7 @@ export function useTauri() {
       // Update settings
       store.updateSettings({ model });
       await saveSettings({ model });
+      await broadcastSettingsUpdate();
 
       return result;
     } catch (error) {
@@ -243,6 +326,10 @@ export function useTauri() {
         model: persisted.model,
         autoCopy: persisted.autoCopy,
         shortcut: persisted.shortcut,
+        languageToggleShortcut: persisted.languageToggleShortcut ?? "",
+        modelToggleShortcut: persisted.modelToggleShortcut ?? "",
+        favoriteLanguages: persisted.favoriteLanguages ?? store.settings.favoriteLanguages,
+        modelLanguages: persisted.modelLanguages ?? {},
       });
 
       // Push the persisted language to the backend. Without this, Whisper stays
@@ -251,6 +338,23 @@ export function useTauri() {
         await setLanguage(persisted.language);
       } catch (err) {
         console.error("Failed to sync persisted language to backend:", err);
+      }
+
+      // Sync persisted toggle config to backend so shortcuts are registered
+      // and per-model filters are honored without the user re-saving anything.
+      try {
+        await invoke("set_favorite_languages", { languages: store.settings.favoriteLanguages });
+        for (const [model, langs] of Object.entries(store.settings.modelLanguages)) {
+          await invoke("set_model_languages", { model, languages: langs });
+        }
+        if (persisted.languageToggleShortcut) {
+          await invoke("set_language_toggle_shortcut", { shortcut: persisted.languageToggleShortcut });
+        }
+        if (persisted.modelToggleShortcut) {
+          await invoke("set_model_toggle_shortcut", { shortcut: persisted.modelToggleShortcut });
+        }
+      } catch (err) {
+        console.error("Failed to sync toggle config to backend:", err);
       }
 
       // Load persisted system health settings
@@ -436,6 +540,149 @@ export function useTauri() {
       openSettings();
     }));
 
+    // Cross-window settings sync. Whichever window mutates settings (Settings
+    // window editing favorites, main window cycling via toggle shortcut, …)
+    // emits `settings:updated`; every window reloads from persistence so its
+    // local Pinia store no longer drifts. Without this, the toggle listeners
+    // below would read stale `favoriteLanguages` and cycle through 14 entries
+    // instead of the 2 the user picked in Settings.
+    unlistenFns.push(await listen("settings:updated", async () => {
+      try {
+        const persisted = await loadSettings();
+        store.updateSettings({
+          language: persisted.language,
+          model: persisted.model,
+          autoCopy: persisted.autoCopy,
+          shortcut: persisted.shortcut,
+          languageToggleShortcut: persisted.languageToggleShortcut ?? "",
+          modelToggleShortcut: persisted.modelToggleShortcut ?? "",
+          favoriteLanguages: persisted.favoriteLanguages ?? store.settings.favoriteLanguages,
+          modelLanguages: persisted.modelLanguages ?? {},
+        });
+      } catch (err) {
+        console.error("Failed to reload settings on settings:updated event:", err);
+      }
+    }));
+
+    // Drop the parenthetical descriptor from a model display name (e.g.
+    // "Large V3 Turbo (Best)" -> "Large V3 Turbo") so the toast inside the
+    // 90×100 px overlay window stays readable on one or two lines.
+    const shortModelName = (name: string): string => name.replace(/\s*\([^)]*\)\s*$/, "");
+
+    // Language cycle shortcut: cycles through favoriteLanguages restricted to
+    // those the CURRENT model supports. The model is sticky — only the model
+    // shortcut changes it. If the current model has fewer than 2 supported
+    // favorites, the cycle is a no-op with an explanatory toast.
+    unlistenFns.push(await listen("shortcut:toggle-language", async () => {
+      const favorites = store.settings.favoriteLanguages;
+      if (favorites.length < 2) {
+        store.showToggleNotification("Add 2+ favorite languages");
+        return;
+      }
+
+      const modelLangs = store.settings.modelLanguages;
+      const currentModel = store.settings.model;
+      // Missing entry = "no restriction yet" → model accepts every favorite.
+      const allowedForModel = (lang: Language): boolean => {
+        const list = modelLangs[currentModel];
+        if (list === undefined) return true;
+        return list.includes(lang);
+      };
+
+      const eligible = favorites.filter(allowedForModel);
+      if (eligible.length === 0) {
+        store.showToggleNotification("No favorite for this model");
+        return;
+      }
+      if (eligible.length === 1) {
+        // If we're already on that single eligible language, nothing to do.
+        // Otherwise force-switch onto it so the user lands on a usable state.
+        const only = eligible[0];
+        if (store.settings.language === only) {
+          store.showToggleNotification("Only 1 favorite for this model");
+          return;
+        }
+        try {
+          await setLanguage(only);
+          store.showToggleNotification(LANGUAGE_DISPLAY_NAMES[only] || only);
+        } catch (error) {
+          console.error("Failed to toggle language:", error);
+          store.showToggleNotification("Toggle failed");
+        }
+        return;
+      }
+
+      // Cycle within the eligible subset. If the current language is outside
+      // the eligible list, jump to the first eligible entry instead of cycling
+      // from a non-existent index.
+      const currentIndex = eligible.indexOf(store.settings.language);
+      const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % eligible.length : 0;
+      const nextLang = eligible[nextIndex];
+
+      try {
+        await setLanguage(nextLang);
+        store.showToggleNotification(LANGUAGE_DISPLAY_NAMES[nextLang] || nextLang);
+      } catch (error) {
+        console.error("Failed to toggle language:", error);
+        store.showToggleNotification("Toggle failed");
+      }
+    }));
+
+    // Model cycle shortcut: cycles through ALL downloaded models. If the next
+    // model doesn't support the current language, it auto-bumps the language
+    // to the first favorite that model accepts (so model switching never gets
+    // blocked just because the active language isn't whitelisted there).
+    // Skips models whose whitelist excludes every favorite — they would
+    // otherwise leave the user with no usable language at all.
+    unlistenFns.push(await listen("shortcut:toggle-model", async () => {
+      if (store.status !== "idle") return;
+
+      const downloaded = store.models.filter((m) => m.downloaded);
+      if (downloaded.length < 2) {
+        store.showToggleNotification(
+          downloaded.length === 0 ? "No model" : "Only 1 model",
+        );
+        return;
+      }
+
+      const modelLangs = store.settings.modelLanguages;
+      const favorites = store.settings.favoriteLanguages;
+      const currentLang = store.settings.language;
+      const currentIdx = downloaded.findIndex((m) => m.id === store.settings.model);
+      const startFrom = Math.max(0, currentIdx);
+
+      for (let step = 1; step <= downloaded.length; step++) {
+        const candidate = downloaded[(startFrom + step) % downloaded.length];
+        const list = modelLangs[candidate.id];
+        const supportsCurrent = list === undefined || list.includes(currentLang);
+        const fallbackLang = list === undefined ? null : favorites.find((l) => list.includes(l));
+
+        if (!supportsCurrent && !fallbackLang) {
+          // Whitelist exists and excludes every favorite → unusable model.
+          continue;
+        }
+
+        try {
+          const nextLang = supportsCurrent ? null : (fallbackLang as Language);
+          const label = shortModelName(candidate.name);
+          store.showToggleNotification(`Loading ${label}…`);
+          await loadWhisperModel(candidate.id);
+          if (nextLang !== null) {
+            await setLanguage(nextLang);
+            store.showToggleNotification(`${label} · ${LANGUAGE_DISPLAY_NAMES[nextLang]}`);
+          } else {
+            store.showToggleNotification(label);
+          }
+        } catch (error) {
+          console.error("Failed to toggle model:", error);
+          store.showToggleNotification("Model load failed");
+        }
+        return;
+      }
+
+      store.showToggleNotification("No model fits favorites");
+    }));
+
     // Global shortcut listener - with guard to prevent duplicate actions
     unlistenFns.push(await listen("shortcut:triggered", async () => {
       // Prevent duplicate actions if already processing
@@ -475,6 +722,10 @@ export function useTauri() {
     setModel,
     setLanguage,
     setShortcut,
+    setLanguageToggleShortcut,
+    setModelToggleShortcut,
+    setFavoriteLanguages,
+    setModelLanguages,
     // Models
     loadWhisperModel,
     loadWhisperModelWithOptions,

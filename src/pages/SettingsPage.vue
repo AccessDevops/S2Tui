@@ -1,16 +1,34 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted } from "vue";
-import { useAppStore, type Language, type ModelId } from "../stores/appStore";
+import {
+  useAppStore,
+  type Language,
+  type ModelId,
+  ALL_LANGUAGES,
+  LANGUAGE_DISPLAY_NAMES,
+} from "../stores/appStore";
 import { useTauri } from "../composables/useTauri";
-import { saveSettings, loadHistory, clearHistory as clearHistoryStore } from "../composables/useStore";
+import { loadSettings, saveSettings, loadHistory, clearHistory as clearHistoryStore } from "../composables/useStore";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import ShortcutCapture from "../components/ShortcutCapture.vue";
 
 const store = useAppStore();
-const { setLanguage, setShortcut, loadWhisperModel, checkSystemHealth, checkPermissions } = useTauri();
+const {
+  setLanguage,
+  setShortcut,
+  setLanguageToggleShortcut,
+  setModelToggleShortcut,
+  setFavoriteLanguages,
+  setModelLanguages,
+  loadWhisperModel,
+  checkSystemHealth,
+  checkPermissions,
+} = useTauri();
 
 const shortcutError = ref<string | null>(null);
+const langToggleShortcutError = ref<string | null>(null);
+const modelToggleShortcutError = ref<string | null>(null);
 
 const settings = computed(() => store.settings);
 const models = computed(() => store.models);
@@ -19,10 +37,53 @@ const history = computed(() => store.history);
 const systemHealth = computed(() => store.systemHealth);
 const gpuStatus = computed(() => store.gpuStatus);
 
+// Each ShortcutCapture sees the *other* two registered shortcuts and rejects
+// duplicates during capture so two actions never share the same key combo.
+const mainShortcutConflicts = computed(() =>
+  [settings.value.languageToggleShortcut, settings.value.modelToggleShortcut].filter(Boolean),
+);
+const langToggleConflicts = computed(() =>
+  [settings.value.shortcut, settings.value.modelToggleShortcut].filter(Boolean),
+);
+const modelToggleConflicts = computed(() =>
+  [settings.value.shortcut, settings.value.languageToggleShortcut].filter(Boolean),
+);
+
+// Models the user has actually downloaded — used for the per-model whitelist UI.
+const downloadedModels = computed(() => models.value.filter((m) => m.downloaded));
+
+function modelLanguagesFor(modelId: string): Language[] {
+  const list = settings.value.modelLanguages[modelId];
+  // Undefined = no override yet, behave like "supports every favorite".
+  return list ?? [...settings.value.favoriteLanguages];
+}
+
 const activeTab = ref<"general" | "models" | "permissions" | "history" | "system">("general");
 const copiedId = ref<string | null>(null);
 const loadingModelId = ref<ModelId | null>(null);
 let unlistenHistory: UnlistenFn | null = null;
+let unlistenSettingsUpdated: UnlistenFn | null = null;
+
+// Pull latest settings from persistence into the local Pinia store. Used both
+// for the initial load on mount and as the handler for `settings:updated`
+// events emitted by the main window (toggle shortcut, etc.).
+async function syncFromPersistence() {
+  try {
+    const persisted = await loadSettings();
+    store.updateSettings({
+      language: persisted.language,
+      model: persisted.model,
+      autoCopy: persisted.autoCopy,
+      shortcut: persisted.shortcut,
+      languageToggleShortcut: persisted.languageToggleShortcut ?? "",
+      modelToggleShortcut: persisted.modelToggleShortcut ?? "",
+      favoriteLanguages: persisted.favoriteLanguages ?? [...ALL_LANGUAGES],
+      modelLanguages: persisted.modelLanguages ?? {},
+    });
+  } catch (e) {
+    console.error("Failed to load persisted settings:", e);
+  }
+}
 
 function handleKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") {
@@ -34,6 +95,10 @@ onMounted(async () => {
   // Note: Do NOT call initListeners() here - it triggers initApp() which would
   // re-open the welcome modal. Settings window has its own Pinia context (not shared).
 
+  // Settings window has its own Pinia context, so the persisted toggle config
+  // (favorite languages, per-model whitelists, shortcuts) must be loaded here.
+  await syncFromPersistence();
+
   // Load history from persistence
   const savedHistory = await loadHistory();
   store.setHistory(savedHistory);
@@ -43,6 +108,13 @@ onMounted(async () => {
     // Reload history from persistence when notified of updates
     const updatedHistory = await loadHistory();
     store.setHistory(updatedHistory);
+  });
+
+  // Listen for cross-window settings mutations (toggle shortcuts in the main
+  // window, future tray actions, …) so this UI reflects them live without
+  // requiring the user to close and reopen the Settings window.
+  unlistenSettingsUpdated = await listen("settings:updated", async () => {
+    await syncFromPersistence();
   });
 
   // Check permissions for the Permissions tab
@@ -66,10 +138,9 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener("keydown", handleKeydown);
 
-  // Clean up event listener
-  if (unlistenHistory) {
-    unlistenHistory();
-  }
+  // Clean up event listeners
+  if (unlistenHistory) unlistenHistory();
+  if (unlistenSettingsUpdated) unlistenSettingsUpdated();
 });
 
 // History handlers
@@ -125,9 +196,8 @@ function getShortModelName(modelId: string | undefined): string {
 // Settings handlers
 async function handleLanguageChange(e: Event) {
   const lang = (e.target as HTMLSelectElement).value as Language;
-  store.updateSettings({ language: lang });
+  // setLanguage now persists and broadcasts on its own.
   await setLanguage(lang);
-  await saveSettings({ language: lang });
 }
 
 async function handleAutoCopyChange(e: Event) {
@@ -145,6 +215,53 @@ async function handleShortcutChange(newShortcut: string) {
     // Revert to previous shortcut in UI
     store.updateSettings({ shortcut: settings.value.shortcut });
   }
+}
+
+async function handleLanguageToggleShortcutChange(newShortcut: string) {
+  langToggleShortcutError.value = null;
+  try {
+    await setLanguageToggleShortcut(newShortcut);
+  } catch (error) {
+    langToggleShortcutError.value =
+      error instanceof Error ? error.message : "Unable to register this shortcut.";
+    store.updateSettings({ languageToggleShortcut: settings.value.languageToggleShortcut });
+  }
+}
+
+async function handleModelToggleShortcutChange(newShortcut: string) {
+  modelToggleShortcutError.value = null;
+  try {
+    await setModelToggleShortcut(newShortcut);
+  } catch (error) {
+    modelToggleShortcutError.value =
+      error instanceof Error ? error.message : "Unable to register this shortcut.";
+    store.updateSettings({ modelToggleShortcut: settings.value.modelToggleShortcut });
+  }
+}
+
+async function handleFavoriteLanguageToggle(lang: Language) {
+  const current = [...settings.value.favoriteLanguages];
+  const index = current.indexOf(lang);
+  if (index >= 0) current.splice(index, 1);
+  else current.push(lang);
+  await setFavoriteLanguages(current);
+}
+
+async function selectAllFavoriteLanguages() {
+  await setFavoriteLanguages([...ALL_LANGUAGES]);
+}
+
+async function deselectAllFavoriteLanguages() {
+  await setFavoriteLanguages([]);
+}
+
+async function handleModelLanguageToggle(modelId: string, lang: Language) {
+  const current = modelLanguagesFor(modelId);
+  const next = [...current];
+  const index = next.indexOf(lang);
+  if (index >= 0) next.splice(index, 1);
+  else next.push(lang);
+  await setModelLanguages(modelId, next);
 }
 
 // Model handlers
@@ -311,6 +428,7 @@ function getBackendColor(backend: string | undefined): string {
             <p class="text-white/50 text-sm">Press this shortcut to start/stop listening</p>
             <ShortcutCapture
               :model-value="settings.shortcut"
+              :conflict-shortcuts="mainShortcutConflicts"
               @change="handleShortcutChange"
             />
             <p v-if="shortcutError" class="text-red-400 text-sm flex items-center gap-2">
@@ -318,6 +436,119 @@ function getBackendColor(backend: string | undefined): string {
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               {{ shortcutError }}
+            </p>
+          </div>
+
+          <!-- Language cycle shortcut -->
+          <div class="space-y-2">
+            <label class="block text-white font-medium">Language cycle shortcut</label>
+            <p class="text-white/50 text-sm">Press this shortcut to cycle through your favorite languages</p>
+            <ShortcutCapture
+              :model-value="settings.languageToggleShortcut"
+              :conflict-shortcuts="langToggleConflicts"
+              :clearable="true"
+              @change="handleLanguageToggleShortcutChange"
+            />
+            <p v-if="langToggleShortcutError" class="text-red-400 text-sm flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              {{ langToggleShortcutError }}
+            </p>
+          </div>
+
+          <!-- Favorite languages checklist -->
+          <div class="space-y-3">
+            <div class="flex items-center justify-between">
+              <div>
+                <label class="block text-white font-medium">Favorite languages</label>
+                <p class="text-white/50 text-sm">Select which languages the cycle shortcut walks through (min. 2)</p>
+              </div>
+              <div class="flex items-center gap-2">
+                <button
+                  @click="selectAllFavoriteLanguages"
+                  class="px-2 py-1 rounded text-xs bg-white/10 hover:bg-white/20 text-white/60 hover:text-white transition-colors"
+                >All</button>
+                <button
+                  @click="deselectAllFavoriteLanguages"
+                  class="px-2 py-1 rounded text-xs bg-white/10 hover:bg-white/20 text-white/60 hover:text-white transition-colors"
+                >None</button>
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <label
+                v-for="lang in ALL_LANGUAGES"
+                :key="lang"
+                class="flex items-center gap-2 p-2 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <input
+                  type="checkbox"
+                  :checked="settings.favoriteLanguages.includes(lang)"
+                  @change="handleFavoriteLanguageToggle(lang)"
+                  class="w-4 h-4 rounded border-white/30 bg-white/10 text-mic-listening focus:ring-mic-listening focus:ring-offset-0"
+                />
+                <span class="text-white text-sm">{{ LANGUAGE_DISPLAY_NAMES[lang] }}</span>
+              </label>
+            </div>
+            <p v-if="settings.favoriteLanguages.length < 2" class="text-amber-400 text-sm flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              Select at least 2 languages for the cycle shortcut to work
+            </p>
+          </div>
+
+          <!-- Per-model language matrix -->
+          <div v-if="downloadedModels.length > 0" class="space-y-3">
+            <div>
+              <label class="block text-white font-medium">Languages per model</label>
+              <p class="text-white/50 text-sm">
+                Restrict each model to the languages it transcribes well. The language shortcut only cycles within
+                the languages enabled on the currently selected model — it never changes the model.
+                Unconfigured models accept every favorite language.
+              </p>
+            </div>
+            <div class="space-y-3">
+              <div
+                v-for="m in downloadedModels"
+                :key="m.id"
+                class="p-3 rounded-lg bg-white/5 border border-white/10 space-y-2"
+              >
+                <div class="text-white text-sm font-medium">{{ m.name }}</div>
+                <div class="flex flex-wrap gap-2">
+                  <label
+                    v-for="lang in settings.favoriteLanguages"
+                    :key="`${m.id}-${lang}`"
+                    class="flex items-center gap-1.5 px-2 py-1 rounded bg-white/5 border border-white/10 cursor-pointer hover:bg-white/10 transition-colors"
+                  >
+                    <input
+                      type="checkbox"
+                      :checked="modelLanguagesFor(m.id).includes(lang)"
+                      @change="handleModelLanguageToggle(m.id, lang)"
+                      class="w-3.5 h-3.5 rounded border-white/30 bg-white/10 text-mic-listening focus:ring-mic-listening focus:ring-offset-0"
+                    />
+                    <span class="text-white text-xs">{{ LANGUAGE_DISPLAY_NAMES[lang] }}</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Model cycle shortcut -->
+          <div class="space-y-2">
+            <label class="block text-white font-medium">Model cycle shortcut</label>
+            <p class="text-white/50 text-sm">Press this shortcut to cycle through models compatible with the current language (reloads model — may take a few seconds)</p>
+            <ShortcutCapture
+              :model-value="settings.modelToggleShortcut"
+              :conflict-shortcuts="modelToggleConflicts"
+              :clearable="true"
+              @change="handleModelToggleShortcutChange"
+            />
+            <p v-if="modelToggleShortcutError" class="text-red-400 text-sm flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              {{ modelToggleShortcutError }}
             </p>
           </div>
         </div>

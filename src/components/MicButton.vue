@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useAppStore } from "../stores/appStore";
 import { useTauri, openSettings } from "../composables/useTauri";
+import { flagIconToneFor, flagUrlFor } from "../utils/flags";
 import VuMeter from "./VuMeter.vue";
 
 const store = useAppStore();
@@ -11,6 +12,22 @@ const { startListen, stopListen } = useTauri();
 const status = computed(() => store.status);
 const vuLevel = computed(() => store.vuLevel);
 const isDragging = ref(false);
+
+// When a specific language is active we paint the matching flag in an inner
+// disc inset by 3px so the surrounding `bg-mic-{state}` colour acts as a
+// thick visible ring. This keeps the green-while-listening (and blue/red)
+// indicator clearly readable even when a flag covers the centre.
+const flagUrl = computed(() => flagUrlFor(store.settings.language));
+const hasFlag = computed(() => flagUrl.value !== undefined);
+
+// Bright-flag detection drives the mic icon colour: white on dark/colourful
+// flags, near-black on bright flags so the icon never disappears (e.g. the
+// French white centre stripe).
+const flagTone = computed(() => flagIconToneFor(store.settings.language));
+const iconColor = computed(() => {
+  if (!hasFlag.value) return "text-white";
+  return flagTone.value === "dark" ? "text-gray-900" : "text-white";
+});
 
 const statusColor = computed(() => {
   switch (status.value) {
@@ -99,20 +116,40 @@ function handleRightClick(e: MouseEvent) {
       @mousedown="handleMouseDown"
       @contextmenu="handleRightClick"
       :class="[
-        'relative z-10 w-14 h-14 flex items-center justify-center rounded-full',
+        'relative z-10 w-14 h-14 flex items-center justify-center rounded-full overflow-hidden',
         'transition-all duration-200 ease-out',
         'hover:scale-110 active:scale-95',
         'shadow-lg hover:shadow-xl',
         'cursor-pointer',
+        // The status fill is always the button background. When a flag is
+        // active, a smaller inner disc sits on top so the status colour is
+        // visible as a thick ring around the flag.
         statusColor,
         { 'animate-pulse-fast': isListening }
       ]"
       :disabled="status === 'processing'"
     >
+      <!-- Inner flag disc (only when language has a flag). Inset by 4px on
+           every side gives a 4px coloured ring (the button's bg-mic-{state})
+           that stays clearly visible while listening/processing/error. -->
+      <div
+        v-if="hasFlag"
+        class="absolute inset-[4px] rounded-full overflow-hidden bg-cover bg-center pointer-events-none"
+        :style="{ backgroundImage: `url(${flagUrl})` }"
+      >
+        <!-- Subtle dark wash only on bright flags, where the white mic icon
+             would otherwise wash out. Dropped for `dark`-tone flags so the
+             colour stays vibrant. -->
+        <div
+          v-if="flagTone === 'light'"
+          class="absolute inset-0 bg-black/20"
+        ></div>
+      </div>
+
       <!-- Microphone Icon -->
       <svg
         xmlns="http://www.w3.org/2000/svg"
-        class="w-6 h-6 text-white"
+        :class="['relative z-10 w-6 h-6 transition-colors', iconColor]"
         fill="none"
         viewBox="0 0 24 24"
         stroke="currentColor"

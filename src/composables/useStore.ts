@@ -1,5 +1,6 @@
 import { load, Store } from "@tauri-apps/plugin-store";
 import type { Settings, HistoryEntry, ModelId } from "../stores/appStore";
+import { ALL_LANGUAGES } from "../stores/appStore";
 
 const STORE_FILE = "settings.json";
 
@@ -16,6 +17,10 @@ const defaultSettings: PersistedSettings = {
   model: "large-v3-turbo",
   autoCopy: true,
   shortcut: "CommandOrControl+Shift+Space",
+  languageToggleShortcut: "",
+  modelToggleShortcut: "",
+  favoriteLanguages: [...ALL_LANGUAGES],
+  modelLanguages: {},
   history: [],
   vulkanWarningDismissed: false,
   welcomeDismissed: false,

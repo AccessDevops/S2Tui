@@ -342,49 +342,186 @@ pub async fn request_microphone_permission(state: State<'_, AppState>) -> Result
     Ok(granted)
 }
 
-/// Update the global shortcut
+/// Re-register every shortcut declared in settings (main + language toggle + model toggle).
+/// Always replaces the whole set atomically: any change to one shortcut routes through here so
+/// that we never end up with a stale registration referencing the wrong key combination.
+pub fn register_all_shortcuts(app: &AppHandle, state: &AppState) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+
+    let settings = state.get_settings();
+    let shortcut_manager = app.global_shortcut();
+
+    if let Err(e) = shortcut_manager.unregister_all() {
+        tracing::warn!("Failed to unregister existing shortcuts: {}", e);
+    }
+
+    if !settings.shortcut.is_empty() {
+        let main_shortcut: Shortcut = settings
+            .shortcut
+            .parse()
+            .map_err(|e| format!("Invalid main shortcut format: {}", e))?;
+
+        shortcut_manager
+            .on_shortcut(main_shortcut, move |app, _shortcut, event| {
+                if event.state == ShortcutState::Pressed {
+                    tracing::info!("Main shortcut triggered");
+                    if let Err(e) = app.emit("shortcut:triggered", ()) {
+                        tracing::error!("Failed to emit shortcut event: {}", e);
+                    }
+                }
+            })
+            .map_err(|e| {
+                format!(
+                    "Failed to register main shortcut '{}': {}. It may already be used by another application.",
+                    settings.shortcut, e
+                )
+            })?;
+        tracing::info!("Main shortcut registered: {}", settings.shortcut);
+    }
+
+    if !settings.language_toggle_shortcut.is_empty() {
+        let lang_shortcut: Shortcut = settings
+            .language_toggle_shortcut
+            .parse()
+            .map_err(|e| format!("Invalid language toggle shortcut format: {}", e))?;
+
+        shortcut_manager
+            .on_shortcut(lang_shortcut, move |app, _shortcut, event| {
+                if event.state == ShortcutState::Pressed {
+                    tracing::info!("Language toggle shortcut triggered");
+                    if let Err(e) = app.emit("shortcut:toggle-language", ()) {
+                        tracing::error!("Failed to emit language toggle event: {}", e);
+                    }
+                }
+            })
+            .map_err(|e| {
+                format!(
+                    "Failed to register language toggle shortcut '{}': {}",
+                    settings.language_toggle_shortcut, e
+                )
+            })?;
+        tracing::info!(
+            "Language toggle shortcut registered: {}",
+            settings.language_toggle_shortcut
+        );
+    }
+
+    if !settings.model_toggle_shortcut.is_empty() {
+        let model_shortcut: Shortcut = settings
+            .model_toggle_shortcut
+            .parse()
+            .map_err(|e| format!("Invalid model toggle shortcut format: {}", e))?;
+
+        shortcut_manager
+            .on_shortcut(model_shortcut, move |app, _shortcut, event| {
+                if event.state == ShortcutState::Pressed {
+                    tracing::info!("Model toggle shortcut triggered");
+                    if let Err(e) = app.emit("shortcut:toggle-model", ()) {
+                        tracing::error!("Failed to emit model toggle event: {}", e);
+                    }
+                }
+            })
+            .map_err(|e| {
+                format!(
+                    "Failed to register model toggle shortcut '{}': {}",
+                    settings.model_toggle_shortcut, e
+                )
+            })?;
+        tracing::info!(
+            "Model toggle shortcut registered: {}",
+            settings.model_toggle_shortcut
+        );
+    }
+
+    Ok(())
+}
+
+/// Update the main listen shortcut. Persists the new value and re-registers every shortcut.
 #[tauri::command]
 pub fn set_shortcut(
     shortcut: String,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
-
-    tracing::info!("Setting new shortcut: {}", shortcut);
-
-    // Parse the new shortcut
-    let new_shortcut: Shortcut = shortcut
-        .parse()
-        .map_err(|e| format!("Invalid shortcut format: {}", e))?;
-
-    // Get the global shortcut manager
-    let shortcut_manager = app.global_shortcut();
-
-    // Unregister all existing shortcuts first
-    if let Err(e) = shortcut_manager.unregister_all() {
-        tracing::warn!("Failed to unregister existing shortcuts: {}", e);
-    }
-
-    // Register the new shortcut with handler
-    // Note: on_shortcut both registers the shortcut AND sets the handler
-    shortcut_manager
-        .on_shortcut(new_shortcut, move |_app, _shortcut, event| {
-            if event.state == ShortcutState::Pressed {
-                tracing::info!("Global shortcut triggered");
-                if let Err(e) = _app.emit("shortcut:triggered", ()) {
-                    tracing::error!("Failed to emit shortcut event: {}", e);
-                }
-            }
-        })
-        .map_err(|e| format!("Failed to register shortcut '{}': {}. It may already be used by another application.", shortcut, e))?;
-
-    // Update the shortcut in state
+    tracing::info!("Setting main shortcut: {}", shortcut);
     state.update_settings(|s| {
         s.shortcut = shortcut.clone();
     });
+    register_all_shortcuts(&app, &state)?;
+    Ok(())
+}
 
-    tracing::info!("Global shortcut updated to: {}", shortcut);
+/// Update the language-cycle shortcut (empty string clears it).
+#[tauri::command]
+pub fn set_language_toggle_shortcut(
+    shortcut: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    tracing::info!("Setting language toggle shortcut: {}", shortcut);
+    state.update_settings(|s| {
+        s.language_toggle_shortcut = shortcut.clone();
+    });
+    register_all_shortcuts(&app, &state)?;
+    Ok(())
+}
+
+/// Update the model-cycle shortcut (empty string clears it).
+#[tauri::command]
+pub fn set_model_toggle_shortcut(
+    shortcut: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    tracing::info!("Setting model toggle shortcut: {}", shortcut);
+    state.update_settings(|s| {
+        s.model_toggle_shortcut = shortcut.clone();
+    });
+    register_all_shortcuts(&app, &state)?;
+    Ok(())
+}
+
+/// Update the favorite languages cycled by the language shortcut.
+/// Codes that don't match a known [`Language`] are silently dropped.
+#[tauri::command]
+pub fn set_favorite_languages(
+    languages: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let parsed: Vec<Language> = languages
+        .iter()
+        .filter_map(|code| Language::from_code(code))
+        .collect();
+    tracing::info!(
+        "Setting favorite languages: {:?}",
+        parsed.iter().map(|l| l.to_code()).collect::<Vec<_>>()
+    );
+    state.update_settings(|s| {
+        s.favorite_languages = parsed;
+    });
+    Ok(())
+}
+
+/// Replace the whitelist of languages enabled for a single model.
+/// Useful for fine-tuned per-language models (e.g. a Latvian-only model).
+#[tauri::command]
+pub fn set_model_languages(
+    model: String,
+    languages: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let parsed: Vec<Language> = languages
+        .iter()
+        .filter_map(|code| Language::from_code(code))
+        .collect();
+    tracing::info!(
+        "Setting languages for model '{}': {:?}",
+        model,
+        parsed.iter().map(|l| l.to_code()).collect::<Vec<_>>()
+    );
+    state.update_settings(|s| {
+        s.model_languages.insert(model, parsed);
+    });
     Ok(())
 }
 

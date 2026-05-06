@@ -49,7 +49,49 @@ export interface Settings {
   model: ModelId;
   autoCopy: boolean;
   shortcut: string;
+  /** Shortcut to cycle through favoriteLanguages. Empty = unbound. */
+  languageToggleShortcut: string;
+  /** Shortcut to cycle through models compatible with current language. Empty = unbound. */
+  modelToggleShortcut: string;
+  /** Languages cycled by the language shortcut. Order is the cycle order. */
+  favoriteLanguages: Language[];
+  /** Per-model language whitelist. Missing key = supports every favorite. */
+  modelLanguages: Record<string, Language[]>;
 }
+
+export const ALL_LANGUAGES: Language[] = [
+  "auto",
+  "en",
+  "fr",
+  "es",
+  "de",
+  "it",
+  "pt",
+  "nl",
+  "ja",
+  "zh",
+  "ko",
+  "ar",
+  "hi",
+  "pl",
+];
+
+export const LANGUAGE_DISPLAY_NAMES: Record<Language, string> = {
+  auto: "Auto",
+  en: "English",
+  fr: "Français",
+  es: "Español",
+  de: "Deutsch",
+  it: "Italiano",
+  pt: "Português",
+  nl: "Nederlands",
+  ja: "日本語",
+  zh: "中文",
+  ko: "한국어",
+  ar: "العربية",
+  hi: "हिन्दी",
+  pl: "Polski",
+};
 
 export interface Permissions {
   microphone: boolean;
@@ -86,7 +128,24 @@ export const useAppStore = defineStore("app", () => {
     model: "large-v3-turbo",
     autoCopy: true,
     shortcut: "CommandOrControl+Shift+Space",
+    languageToggleShortcut: "",
+    modelToggleShortcut: "",
+    favoriteLanguages: [...ALL_LANGUAGES],
+    modelLanguages: {},
   });
+
+  // Toast shown above the mic button after a language/model toggle.
+  const toggleNotification = ref<{ text: string; visible: boolean }>({ text: "", visible: false });
+  let toggleNotificationTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function showToggleNotification(text: string) {
+    if (toggleNotificationTimer) clearTimeout(toggleNotificationTimer);
+    toggleNotification.value = { text, visible: true };
+    toggleNotificationTimer = setTimeout(() => {
+      toggleNotification.value = { text: "", visible: false };
+      toggleNotificationTimer = null;
+    }, 1500);
+  }
 
   const permissions = ref<Permissions>({
     microphone: false,
@@ -319,6 +378,7 @@ export const useAppStore = defineStore("app", () => {
     partialTranscript,
     lastTranscript,
     showCopyNotification,
+    toggleNotification,
     errorMessage,
     errorVisible,
     settings,
@@ -352,6 +412,7 @@ export const useAppStore = defineStore("app", () => {
     clearHistory,
     removeFromHistory,
     triggerCopyNotification,
+    showToggleNotification,
     // System health actions
     setSystemHealth,
     setGpuStatus,

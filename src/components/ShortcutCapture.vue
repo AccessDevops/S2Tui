@@ -2,9 +2,19 @@
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { platform } from "@tauri-apps/plugin-os";
 
-const props = defineProps<{
-  modelValue: string;
-}>();
+const props = withDefaults(
+  defineProps<{
+    modelValue: string;
+    /** Other registered shortcuts to flag as conflicts during capture. */
+    conflictShortcuts?: string[];
+    /** Show an inline "Clear" button when a shortcut is bound. */
+    clearable?: boolean;
+  }>(),
+  {
+    conflictShortcuts: () => [],
+    clearable: false,
+  },
+);
 
 const emit = defineEmits<{
   (e: "update:modelValue", value: string): void;
@@ -120,7 +130,19 @@ function isForbiddenShortcut(shortcut: string): boolean {
   return FORBIDDEN_SHORTCUTS.has(normalized);
 }
 
-const displayValue = computed(() => formatShortcut(props.modelValue));
+const displayValue = computed(() => {
+  if (!props.modelValue) return "Not set";
+  return formatShortcut(props.modelValue);
+});
+
+function isConflictShortcut(shortcut: string): boolean {
+  return props.conflictShortcuts.some((s) => s && s === shortcut);
+}
+
+function clearShortcut() {
+  emit("update:modelValue", "");
+  emit("change", "");
+}
 
 function startCapture() {
   isCapturing.value = true;
@@ -158,6 +180,10 @@ function handleKeyDown(e: KeyboardEvent) {
     }
 
     const tauriShortcut = toTauriFormat(shortcut);
+    if (isConflictShortcut(tauriShortcut)) {
+      error.value = "This shortcut is already used by another action";
+      return;
+    }
     emit("update:modelValue", tauriShortcut);
     emit("change", tauriShortcut);
     stopCapture();
@@ -190,13 +216,24 @@ onUnmounted(() => {
         <span v-if="isCapturing" class="text-mic-listening">
           Press a shortcut...
         </span>
-        <span v-else>
+        <span v-else :class="{ 'text-white/40 italic': !modelValue }">
           {{ displayValue }}
         </span>
         <span v-if="!isCapturing" class="text-white/40 text-sm font-sans">
           Click to change
         </span>
       </div>
+    </button>
+
+    <button
+      v-if="clearable && modelValue && !isCapturing"
+      @click="clearShortcut"
+      class="text-white/40 hover:text-red-400 text-sm transition-colors flex items-center gap-1"
+    >
+      <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+      </svg>
+      Clear shortcut
     </button>
 
     <!-- Error message -->
@@ -210,6 +247,7 @@ onUnmounted(() => {
     <!-- Help text -->
     <p class="text-white/40 text-xs">
       Use a combination like {{ isMac ? '⌘ + ⇧' : 'Ctrl + Shift' }} + a key. System shortcuts are forbidden.
+      If a chosen shortcut never triggers, another application may already use it — try a different combination.
     </p>
   </div>
 </template>
