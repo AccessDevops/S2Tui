@@ -1,96 +1,113 @@
 name: Release
 
+# Tag-driven release. Push a tag matching `v*` to start the workflow, or
+# trigger it manually via `workflow_dispatch` against an existing tag.
+#
+# Defensive design rationale (see /Users/clement/.claude/plans/ for the
+# full post-mortem of the v0.1.5 duplicate-release incident):
+#   - `concurrency` prevents two runs racing on the same tag.
+#   - `create-release` is idempotent: it reuses an existing draft if one
+#     already exists for the tag, instead of letting softprops/action-gh-release
+#     create a duplicate.
+#   - All upload steps reference the SAME tag/release that create-release
+#     resolved, via `releaseId` (tauri-action) or the `gh` CLI by tag.
+#   - The previous "Create and push tag" step is GONE: the tag is created
+#     locally and pushed by the maintainer, never by the workflow itself.
+
 on:
-  workflow_dispatch:  # Manual trigger only - version read from package.json
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Existing tag to (re)release, e.g. v0.1.6'
+        required: true
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
     outputs:
-      release_id: ${{ steps.create_release.outputs.id }}
-      version: ${{ steps.get_version.outputs.version }}
+      release_id: ${{ steps.rel.outputs.release_id }}
+      version: ${{ steps.rel.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Get version from package.json
+      - name: Resolve version
         id: get_version
         run: |
-          VERSION=$(node -p "require('./package.json').version")
-          echo "version=v${VERSION}" >> $GITHUB_OUTPUT
-          echo "Version: v${VERSION}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: $VERSION"
 
-      - name: Create and push tag
+      - name: Resolve / create draft Release (idempotent)
+        id: rel
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
+          set -euo pipefail
           TAG="${{ steps.get_version.outputs.version }}"
 
-          # Delete remote tag if exists
-          if git ls-remote --tags origin | grep -q "refs/tags/$TAG"; then
-            echo "Deleting existing remote tag $TAG"
-            git push origin --delete "$TAG" || true
+          # Reuse an existing release for this tag (draft or published) if any.
+          # This stops softprops-style duplicate-creation races dead.
+          EXISTING=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.id // empty' 2>/dev/null || true)
+
+          if [ -n "$EXISTING" ]; then
+            echo "Reusing existing release id=$EXISTING for tag $TAG"
+          else
+            echo "Creating draft release for tag $TAG"
+            gh release create "$TAG" \
+              --draft \
+              --title "S2Tui $TAG" \
+              --notes "## What's New
+
+          See [CHANGELOG.md](https://github.com/$GITHUB_REPOSITORY/blob/main/CHANGELOG.md) for details.
+
+          ## Downloads
+
+          | Platform | Installer | Portable |
+          |----------|-----------|----------|
+          | **macOS (Apple Silicon)** | \`.dmg\` | - |
+          | **macOS (Intel)** | \`.dmg\` | - |
+          | **Windows** | \`.exe\` (NSIS), \`.msi\` | \`.zip\` (portable) |
+          | **Linux** | \`.deb\`, \`.rpm\` | \`.tar.gz\` (portable) |
+
+          ## Installation Notes
+
+          ### macOS
+          - Download the \`.dmg\` for your architecture, drag S2Tui to Applications.
+          - First launch: Right-click → Open (to bypass Gatekeeper).
+
+          ### Windows
+          - **NSIS Installer**: download \`*-setup.exe\` and run.
+          - **MSI Installer**: download \`*.msi\` (preferred for enterprise).
+          - **Portable**: download \`*_portable.zip\`, extract, run.
+
+          ### Linux
+          - **Debian/Ubuntu**: \`sudo dpkg -i s2tui_*.deb\`
+          - **Fedora/RHEL/CentOS**: \`sudo rpm -ivh s2tui-*.rpm\`
+          - **Portable**: extract the \`.tar.gz\` and run."
+            EXISTING=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.id')
           fi
 
-          # Delete local tag if exists
-          if git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "Deleting existing local tag $TAG"
-            git tag -d "$TAG"
-          fi
+          echo "release_id=$EXISTING" >> "$GITHUB_OUTPUT"
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
 
-          # Create and push new tag
-          git tag -a "$TAG" -m "Release $TAG"
-          git push origin "$TAG"
-
-      - name: Create Release
-        id: create_release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ steps.get_version.outputs.version }}
-          name: S2Tui ${{ steps.get_version.outputs.version }}
-          body: |
-            ## What's New
-
-            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
-
-            ## Downloads
-
-            | Platform | Installer | Portable |
-            |----------|-----------|----------|
-            | **macOS (Apple Silicon)** | `.dmg` | - |
-            | **macOS (Intel)** | `.dmg` | - |
-            | **Windows** | `.exe` (NSIS), `.msi` | `.zip` (portable) |
-            | **Linux** | `.deb`, `.rpm` | `.tar.gz` (portable) |
-
-            ## Installation Notes
-
-            ### macOS
-            - Download the `.dmg` file for your architecture
-            - Open the DMG and drag S2Tui to Applications
-            - First launch: Right-click → Open (to bypass Gatekeeper)
-
-            ### Windows
-            - **NSIS Installer**: Download `*-setup.exe` and run
-            - **MSI Installer**: Download `*.msi` and run (preferred for enterprise)
-            - **Portable**: Download `*_portable.zip`, extract and run (no installation)
-
-            ### Linux
-            - **Debian/Ubuntu**: Install with `sudo dpkg -i s2tui_*.deb`
-            - **Fedora/RHEL/CentOS**: Install with `sudo rpm -ivh s2tui-*.rpm`
-            - **Portable**: Extract `.tar.gz` and run
-          draft: true
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # macOS build - single binary with Metal (no launcher needed)
-  build-macos:
-    name: Build (macOS)
+  build:
+    name: Build (${{ matrix.platform.name }})
     needs: create-release
     strategy:
       fail-fast: false
@@ -99,9 +116,19 @@ jobs:
           - name: macOS-arm64
             os: macos-latest
             target: aarch64-apple-darwin
+            bundles: dmg
           - name: macOS-x64
             os: macos-15-intel
             target: x86_64-apple-darwin
+            bundles: dmg
+          - name: Windows
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: 'nsis,msi'
+          - name: Linux
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: deb
 
     runs-on: ${{ matrix.platform.os }}
 
@@ -135,137 +162,10 @@ jobs:
           workspaces: src-tauri -> target
           key: ${{ matrix.platform.target }}
 
-      - name: Install frontend dependencies
-        run: npm ci
+      # ----- Per-platform system dependencies -----
 
-      - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CI: true
-        with:
-          releaseId: ${{ needs.create-release.outputs.release_id }}
-          args: --target ${{ matrix.platform.target }} --bundles dmg
-
-  # Windows build - Disabled: builds done manually
-  # build-windows:
-  #   name: Build (Windows)
-  #   needs: create-release
-  #   runs-on: windows-latest
-  #
-  #   steps:
-  #     - name: Checkout
-  #       uses: actions/checkout@v4
-  #
-  #     - name: Download Whisper models
-  #       shell: bash
-  #       run: |
-  #         mkdir -p src-tauri/models
-  #         curl -L -o src-tauri/models/ggml-small.bin \
-  #           "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin"
-  #         curl -L -o src-tauri/models/ggml-large-v3-turbo.bin \
-  #           "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
-  #
-  #     - name: Setup Node.js
-  #       uses: actions/setup-node@v4
-  #       with:
-  #         node-version: 20
-  #         cache: npm
-  #
-  #     - name: Setup Rust
-  #       uses: dtolnay/rust-toolchain@stable
-  #
-  #     - name: Install dependencies
-  #       shell: pwsh
-  #       run: |
-  #         Write-Host "Installing CMake and Ninja..."
-  #         choco install cmake ninja -y --no-progress
-  #
-  #         Write-Host "Downloading Vulkan SDK..."
-  #         $vulkanVersion = "1.4.304.0"
-  #         $vulkanUrl = "https://sdk.lunarg.com/sdk/download/$vulkanVersion/windows/VulkanSDK-$vulkanVersion-Installer.exe"
-  #         $installerPath = "$env:TEMP\VulkanSDK-Installer.exe"
-  #         Invoke-WebRequest -Uri $vulkanUrl -OutFile $installerPath
-  #
-  #         Write-Host "Installing Vulkan SDK..."
-  #         Start-Process -FilePath $installerPath -ArgumentList "/S" -Wait -NoNewWindow
-  #
-  #         $vulkanPath = "C:\VulkanSDK\$vulkanVersion"
-  #         if (Test-Path $vulkanPath) {
-  #           echo "VULKAN_SDK=$vulkanPath" >> $env:GITHUB_ENV
-  #           Write-Host "VULKAN_SDK set to: $vulkanPath"
-  #         } else {
-  #           Write-Host "Vulkan SDK installation failed!"
-  #           exit 1
-  #         }
-  #
-  #     - name: Install frontend dependencies
-  #       run: npm ci
-  #
-  #     - name: Build Tauri app
-  #       uses: tauri-apps/tauri-action@v0
-  #       env:
-  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  #         CMAKE_GENERATOR: Ninja
-  #       with:
-  #         releaseId: ${{ needs.create-release.outputs.release_id }}
-  #         args: --bundles nsis,msi
-  #
-  #     - name: Create portable ZIP
-  #       shell: pwsh
-  #       run: |
-  #         $version = "${{ needs.create-release.outputs.version }}"
-  #         $distDir = "S2Tui-portable"
-  #
-  #         # Create distribution directory
-  #         New-Item -ItemType Directory -Force -Path $distDir
-  #         New-Item -ItemType Directory -Force -Path "$distDir/models"
-  #
-  #         # Copy single binary
-  #         Copy-Item "src-tauri/target/release/S2Tui.exe" "$distDir/"
-  #
-  #         # Copy models
-  #         Copy-Item "src-tauri/models/*.bin" "$distDir/models/"
-  #
-  #         # Create ZIP
-  #         Compress-Archive -Path "$distDir/*" -DestinationPath "S2Tui_${version}_windows_x64_portable.zip"
-  #
-  #     - name: Upload portable ZIP
-  #       uses: softprops/action-gh-release@v1
-  #       with:
-  #         tag_name: ${{ needs.create-release.outputs.version }}
-  #         files: S2Tui_*_windows_x64_portable.zip
-  #       env:
-  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # Linux build - single binary with Vulkan (shows warning if Vulkan unavailable)
-  build-linux:
-    name: Build (Linux)
-    needs: create-release
-    runs-on: ubuntu-22.04
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download Whisper models
-        run: |
-          mkdir -p src-tauri/models
-          curl -L -o src-tauri/models/ggml-small.bin \
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin"
-          curl -L -o src-tauri/models/ggml-large-v3-turbo.bin \
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install dependencies
+      - name: Install Linux dependencies
+        if: matrix.platform.name == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -278,94 +178,105 @@ jobs:
             libgtk-3-dev \
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev \
-            wget \
+            libxcb-shm0 \
             libvulkan-dev \
-            libxcb-shm0
-
-          # Download and install Vulkan SDK
+            rpm \
+            wget
+          # Vulkan SDK for the Linux build (matches v0.1.5's build-linux job).
           VULKAN_VERSION=1.3.296.0
           wget -q "https://sdk.lunarg.com/sdk/download/${VULKAN_VERSION}/linux/vulkansdk-linux-x86_64-${VULKAN_VERSION}.tar.xz"
-          tar -xf vulkansdk-linux-x86_64-${VULKAN_VERSION}.tar.xz
+          tar -xf "vulkansdk-linux-x86_64-${VULKAN_VERSION}.tar.xz"
           echo "VULKAN_SDK=$PWD/${VULKAN_VERSION}/x86_64" >> $GITHUB_ENV
           echo "$PWD/${VULKAN_VERSION}/x86_64/bin" >> $GITHUB_PATH
+
+      - name: Install Windows build tools
+        if: matrix.platform.name == 'Windows'
+        shell: pwsh
+        run: |
+          choco install ninja -y --no-progress
+          # Vulkan SDK for whisper-cpp's optional Vulkan backend.
+          $vulkanVersion = "1.4.304.0"
+          $vulkanUrl = "https://sdk.lunarg.com/sdk/download/$vulkanVersion/windows/VulkanSDK-$vulkanVersion-Installer.exe"
+          $installerPath = "$env:TEMP\VulkanSDK-Installer.exe"
+          Invoke-WebRequest -Uri $vulkanUrl -OutFile $installerPath
+          Start-Process -FilePath $installerPath -ArgumentList "/S" -Wait -NoNewWindow
+          $vulkanPath = "C:\VulkanSDK\$vulkanVersion"
+          if (Test-Path $vulkanPath) {
+            "VULKAN_SDK=$vulkanPath" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+          }
 
       - name: Install frontend dependencies
         run: npm ci
 
+      # ----- Build & primary upload -----
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
-        timeout-minutes: 30
+        timeout-minutes: 45
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Whisper-cpp's CMake step needs Ninja on Windows with newer Visual
+          # Studio toolchains. Set per-step to keep local dev unaffected.
+          CMAKE_GENERATOR: ${{ matrix.platform.name == 'Windows' && 'Ninja' || '' }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
-          args: --bundles deb --features gpu-vulkan
+          args: --target ${{ matrix.platform.target }} --bundles ${{ matrix.platform.bundles }} ${{ matrix.platform.name == 'Linux' && '--features gpu-vulkan' || '' }}
 
-      - name: Create portable tarball
+      # ----- Per-platform extra artifacts -----
+
+      - name: Create Windows portable ZIP
+        if: matrix.platform.name == 'Windows'
+        shell: pwsh
+        run: |
+          $version = "${{ needs.create-release.outputs.version }}"
+          $distDir = "S2Tui-portable"
+          New-Item -ItemType Directory -Force -Path "$distDir" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$distDir/models" | Out-Null
+          Copy-Item "src-tauri/target/${{ matrix.platform.target }}/release/S2Tui.exe" "$distDir/"
+          Copy-Item "src-tauri/models/*.bin" "$distDir/models/"
+          Compress-Archive -Path "$distDir/*" -DestinationPath "S2Tui_${version}_windows_portable.zip"
+
+      - name: Upload Windows portable ZIP
+        if: matrix.platform.name == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = "${{ needs.create-release.outputs.version }}"
+          gh release upload "$version" "S2Tui_${version}_windows_portable.zip" --clobber
+
+      - name: Create Linux portable tarball
+        if: matrix.platform.name == 'Linux'
         run: |
           version="${{ needs.create-release.outputs.version }}"
           distDir="S2Tui-portable"
-
           mkdir -p "$distDir/models"
-
-          # Copy single binary (mainBinaryName from tauri.conf.json)
-          cp src-tauri/target/release/S2Tui "$distDir/S2Tui"
+          cp src-tauri/target/${{ matrix.platform.target }}/release/S2Tui "$distDir/S2Tui"
           cp src-tauri/models/*.bin "$distDir/models/"
-
           chmod +x "$distDir/S2Tui"
+          tar -czf "S2Tui_${version}_linux_x64_portable.tar.gz" "$distDir"
 
-          tar -czvf "S2Tui_${version}_linux_x64_portable.tar.gz" "$distDir"
-
-      - name: Upload portable tarball
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ needs.create-release.outputs.version }}
-          files: S2Tui_*_linux_x64_portable.tar.gz
+      - name: Upload Linux portable tarball
+        if: matrix.platform.name == 'Linux'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload build artifacts for RPM
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-binary
-          path: |
-            src-tauri/target/release/S2Tui
-            src-tauri/models/*.bin
-          retention-days: 1
-
-  # RPM build - separate job with Fedora container for faster native rpmbuild
-  build-rpm:
-    name: Build RPM (Fedora)
-    needs: [create-release, build-linux]
-    runs-on: ubuntu-latest
-    container:
-      image: fedora:40
-
-    steps:
-      - name: Install dependencies
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          dnf install -y rpm-build rpmdevtools
+          version="${{ needs.create-release.outputs.version }}"
+          gh release upload "$version" "S2Tui_${version}_linux_x64_portable.tar.gz" --clobber
 
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-binary
-          path: artifacts
-
-      - name: List artifact contents
+      - name: Build RPM (Linux)
+        if: matrix.platform.name == 'Linux'
         run: |
-          echo "=== Artifact directory structure ==="
-          find artifacts -type f
-          echo "=== Done ==="
-
-      - name: Setup RPM build environment
-        run: |
-          rpmdev-setuptree
+          set -euo pipefail
           version="${{ needs.create-release.outputs.version }}"
           version_num="${version#v}"
 
-          # Create spec file
-          cat > ~/rpmbuild/SPECS/s2tui.spec << EOF
+          mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+
+          cp src-tauri/target/${{ matrix.platform.target }}/release/S2Tui ~/rpmbuild/SOURCES/S2Tui
+          cp src-tauri/models/*.bin ~/rpmbuild/SOURCES/
+
+          cat > ~/rpmbuild/SPECS/s2tui.spec <<EOF
           Name:           s2tui
           Version:        ${version_num}
           Release:        1%{?dist}
@@ -373,11 +284,11 @@ jobs:
           License:        MIT
           URL:            https://github.com/${{ github.repository }}
           BuildArch:      x86_64
-
           Requires:       vulkan-loader
 
           %description
-          S2Tui is a local Speech-to-Text desktop application with Vulkan GPU acceleration.
+          S2Tui is a local Speech-to-Text desktop application with Vulkan GPU
+          acceleration.
 
           %install
           mkdir -p %{buildroot}/usr/bin
@@ -390,32 +301,29 @@ jobs:
           /usr/share/s2tui/models/*.bin
           EOF
 
-          # Copy files to SOURCES (use find to handle varying artifact structure)
-          find artifacts -name "S2Tui" -type f -exec cp {} ~/rpmbuild/SOURCES/S2Tui \;
-          find artifacts -name "*.bin" -type f -exec cp {} ~/rpmbuild/SOURCES/ \;
-
-      - name: Build RPM
-        run: |
           rpmbuild -bb ~/rpmbuild/SPECS/s2tui.spec
           cp ~/rpmbuild/RPMS/x86_64/*.rpm ./
 
-      - name: Upload RPM to release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ needs.create-release.outputs.version }}
-          files: "*.rpm"
+      - name: Upload RPM
+        if: matrix.platform.name == 'Linux'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${{ needs.create-release.outputs.version }}"
+          gh release upload "$version" *.rpm --clobber
 
   publish-release:
     name: Publish Release
-    needs: [create-release, build-macos, build-linux, build-rpm]  # build-windows disabled (done manually)
+    needs: [create-release, build]
     runs-on: ubuntu-latest
     steps:
-      - name: Publish release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ needs.create-release.outputs.version }}
-          draft: false
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Mark release as published
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${{ needs.create-release.outputs.version }}"
+          gh release edit "$version" --draft=false
+          echo "Release $version is now public."

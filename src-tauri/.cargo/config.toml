@@ -4,7 +4,11 @@
 [target.'cfg(target_os = "macos")']
 rustflags = ["--cfg", "macos_metal"]
 
-# Windows: Use Ninja for CMake (required for newer Visual Studio versions)
-[target.'cfg(target_os = "windows")']
-[target.'cfg(target_os = "windows")'.env]
-CMAKE_GENERATOR = "Ninja"
+# Note: the previous attempt to declare a Windows-only `CMAKE_GENERATOR=Ninja`
+# via `[target.'cfg(target_os = "windows")'.env]` was silently ignored by
+# cargo (cargo doesn't accept `env` as a sub-key under `[target]`). Cargo
+# also has no per-target `[env]` table, so we can't scope an env var to
+# Windows here without breaking non-Windows local dev (which would suddenly
+# require Ninja). Instead, the Windows CI build step sets `CMAKE_GENERATOR`
+# directly in `.github/workflows/release.yml`. Local dev on macOS/Linux
+# falls back to cmake's default generator, which is what we want.
