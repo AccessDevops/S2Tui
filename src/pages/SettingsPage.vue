@@ -30,6 +30,11 @@ const shortcutError = ref<string | null>(null);
 const langToggleShortcutError = ref<string | null>(null);
 const modelToggleShortcutError = ref<string | null>(null);
 
+// App version pulled at runtime from tauri.conf.json so the footer never
+// drifts from the actually-built binary's version (the previous hard-coded
+// "v0.1.0" was visibly stale after every release).
+const appVersion = ref<string>("");
+
 const settings = computed(() => store.settings);
 const models = computed(() => store.models);
 const permissions = computed(() => store.permissions);
@@ -129,6 +134,15 @@ onMounted(async () => {
     await checkSystemHealth();
   } catch (error) {
     console.error("Failed to load system health:", error);
+  }
+
+  // Pull the actual app version from Tauri (reads tauri.conf.json) so the
+  // footer matches the built binary instead of a stale hard-coded literal.
+  try {
+    const { getVersion } = await import("@tauri-apps/api/app");
+    appVersion.value = await getVersion();
+  } catch (error) {
+    console.error("Failed to read app version:", error);
   }
 
   // Listen for Escape key to close window
@@ -356,7 +370,7 @@ function getBackendColor(backend: string | undefined): string {
 
         <!-- App info -->
         <div class="text-center pt-4 space-y-1">
-          <p class="text-white/30 text-xs">S2Tui v0.1.0</p>
+          <p class="text-white/30 text-xs">S2Tui {{ appVersion ? `v${appVersion}` : '' }}</p>
           <p class="text-white/30 text-xs">
             made with ❤️ by
             <a
