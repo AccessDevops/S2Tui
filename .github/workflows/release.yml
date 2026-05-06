@@ -36,8 +36,8 @@ jobs:
     name: Create Release
     runs-on: ubuntu-latest
     outputs:
-      release_id: ${{ steps.rel.outputs.release_id }}
-      version: ${{ steps.rel.outputs.version }}
+      release_id: ${{ steps.create_release.outputs.id }}
+      version: ${{ steps.get_version.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -53,58 +53,52 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Resolved version: $VERSION"
 
-      - name: Resolve / create draft Release (idempotent)
-        id: rel
+      # Idempotent draft creation. softprops/action-gh-release@v1 finds the
+      # existing release for the tag (draft or published) if one already
+      # exists, so re-runs converge on the same Release object instead of
+      # producing duplicates. The previous v0.1.5 duplicate-release incident
+      # came from a race between two concurrent runs; the workflow-level
+      # `concurrency:` group above now serialises runs on the same tag, which
+      # is the durable fix for that class of bug.
+      - name: Create / update draft Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.get_version.outputs.version }}
+          name: S2Tui ${{ steps.get_version.outputs.version }}
+          draft: true
+          prerelease: false
+          body: |
+            ## What's New
+
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
+
+            ## Downloads
+
+            | Platform | Installer | Portable |
+            |----------|-----------|----------|
+            | **macOS (Apple Silicon)** | `.dmg` | - |
+            | **macOS (Intel)** | `.dmg` | - |
+            | **Windows** | `.exe` (NSIS), `.msi` | `.zip` (portable) |
+            | **Linux** | `.deb`, `.rpm` | `.tar.gz` (portable) |
+
+            ## Installation Notes
+
+            ### macOS
+            - Download the `.dmg` for your architecture, drag S2Tui to Applications.
+            - First launch: Right-click → Open (to bypass Gatekeeper).
+
+            ### Windows
+            - **NSIS Installer**: download `*-setup.exe` and run.
+            - **MSI Installer**: download `*.msi` (preferred for enterprise).
+            - **Portable**: download `*_portable.zip`, extract, run.
+
+            ### Linux
+            - **Debian/Ubuntu**: `sudo dpkg -i s2tui_*.deb`
+            - **Fedora/RHEL/CentOS**: `sudo rpm -ivh s2tui-*.rpm`
+            - **Portable**: extract the `.tar.gz` and run.
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          TAG="${{ steps.get_version.outputs.version }}"
-
-          # Reuse an existing release for this tag (draft or published) if any.
-          # This stops softprops-style duplicate-creation races dead.
-          EXISTING=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.id // empty' 2>/dev/null || true)
-
-          if [ -n "$EXISTING" ]; then
-            echo "Reusing existing release id=$EXISTING for tag $TAG"
-          else
-            echo "Creating draft release for tag $TAG"
-            gh release create "$TAG" \
-              --draft \
-              --title "S2Tui $TAG" \
-              --notes "## What's New
-
-          See [CHANGELOG.md](https://github.com/$GITHUB_REPOSITORY/blob/main/CHANGELOG.md) for details.
-
-          ## Downloads
-
-          | Platform | Installer | Portable |
-          |----------|-----------|----------|
-          | **macOS (Apple Silicon)** | \`.dmg\` | - |
-          | **macOS (Intel)** | \`.dmg\` | - |
-          | **Windows** | \`.exe\` (NSIS), \`.msi\` | \`.zip\` (portable) |
-          | **Linux** | \`.deb\`, \`.rpm\` | \`.tar.gz\` (portable) |
-
-          ## Installation Notes
-
-          ### macOS
-          - Download the \`.dmg\` for your architecture, drag S2Tui to Applications.
-          - First launch: Right-click → Open (to bypass Gatekeeper).
-
-          ### Windows
-          - **NSIS Installer**: download \`*-setup.exe\` and run.
-          - **MSI Installer**: download \`*.msi\` (preferred for enterprise).
-          - **Portable**: download \`*_portable.zip\`, extract, run.
-
-          ### Linux
-          - **Debian/Ubuntu**: \`sudo dpkg -i s2tui_*.deb\`
-          - **Fedora/RHEL/CentOS**: \`sudo rpm -ivh s2tui-*.rpm\`
-          - **Portable**: extract the \`.tar.gz\` and run."
-            EXISTING=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.id')
-          fi
-
-          echo "release_id=$EXISTING" >> "$GITHUB_OUTPUT"
-          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build:
     name: Build (${{ matrix.platform.name }})
