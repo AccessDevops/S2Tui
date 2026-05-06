@@ -194,6 +194,15 @@ jobs:
         shell: pwsh
         run: |
           choco install ninja -y --no-progress
+
+          # whisper-cpp's CMake step on Windows needs an explicit generator.
+          # Exporting via $GITHUB_ENV (instead of a job-level `env:` ternary)
+          # is the only way to *not set* the variable at all on macOS/Linux —
+          # otherwise CMake receives `-G ""` and bails with
+          # "Could not create named generator". This is the regression that
+          # broke every non-Windows job in run 25447531916.
+          "CMAKE_GENERATOR=Ninja" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+
           # Vulkan SDK for whisper-cpp's optional Vulkan backend.
           $vulkanVersion = "1.4.304.0"
           $vulkanUrl = "https://sdk.lunarg.com/sdk/download/$vulkanVersion/windows/VulkanSDK-$vulkanVersion-Installer.exe"
@@ -215,9 +224,6 @@ jobs:
         timeout-minutes: 45
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Whisper-cpp's CMake step needs Ninja on Windows with newer Visual
-          # Studio toolchains. Set per-step to keep local dev unaffected.
-          CMAKE_GENERATOR: ${{ matrix.platform.name == 'Windows' && 'Ninja' || '' }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: --target ${{ matrix.platform.target }} --bundles ${{ matrix.platform.bundles }} ${{ matrix.platform.name == 'Linux' && '--features gpu-vulkan' || '' }}
