@@ -1,9 +1,16 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
+import {
+  ALL_LANGUAGE_CODES,
+  LANGUAGE_DISPLAY_NAMES as LANGUAGE_DISPLAY_NAMES_REGISTRY,
+} from "../utils/languages";
 
 export type AppStatus = "idle" | "listening" | "processing" | "error";
 export type ModelId = "small" | "large-v3-turbo";
-export type Language = "auto" | "en" | "fr" | "es" | "de" | "it" | "pt" | "nl" | "ja" | "zh" | "ko" | "ar" | "hi" | "pl";
+// `Language` used to be a 14-entry union; it's now any ISO 639-1 string
+// the registry in `utils/languages.ts` accepts. Validation lives in Rust
+// (`Language::is_known`) and in the registry — TS just keeps it loose.
+export type Language = string;
 export type GpuBackendType = "cpu" | "vulkan" | "metal" | "cuda" | "hipblas";
 
 // System health check types
@@ -59,39 +66,10 @@ export interface Settings {
   modelLanguages: Record<string, Language[]>;
 }
 
-export const ALL_LANGUAGES: Language[] = [
-  "auto",
-  "en",
-  "fr",
-  "es",
-  "de",
-  "it",
-  "pt",
-  "nl",
-  "ja",
-  "zh",
-  "ko",
-  "ar",
-  "hi",
-  "pl",
-];
-
-export const LANGUAGE_DISPLAY_NAMES: Record<Language, string> = {
-  auto: "Auto",
-  en: "English",
-  fr: "Français",
-  es: "Español",
-  de: "Deutsch",
-  it: "Italiano",
-  pt: "Português",
-  nl: "Nederlands",
-  ja: "日本語",
-  zh: "中文",
-  ko: "한국어",
-  ar: "العربية",
-  hi: "हिन्दी",
-  pl: "Polski",
-};
+// Re-exports kept for backward compat with components that already import
+// these names. Source of truth is now `src/utils/languages.ts`.
+export const ALL_LANGUAGES: Language[] = ALL_LANGUAGE_CODES;
+export const LANGUAGE_DISPLAY_NAMES: Record<Language, string> = LANGUAGE_DISPLAY_NAMES_REGISTRY;
 
 export interface Permissions {
   microphone: boolean;

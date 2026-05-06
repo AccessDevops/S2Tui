@@ -274,29 +274,17 @@ pub fn set_model(name: String, state: State<'_, AppState>) -> Result<(), String>
 #[tauri::command]
 pub fn set_language(lang: String, state: State<'_, AppState>) -> Result<(), String> {
     tracing::info!("Setting language: {}", lang);
-    let language = match lang.as_str() {
-        "en" => Language::En,
-        "fr" => Language::Fr,
-        "es" => Language::Es,
-        "de" => Language::De,
-        "it" => Language::It,
-        "pt" => Language::Pt,
-        "nl" => Language::Nl,
-        "ja" => Language::Ja,
-        "zh" => Language::Zh,
-        "ko" => Language::Ko,
-        "ar" => Language::Ar,
-        "hi" => Language::Hi,
-        "pl" => Language::Pl,
-        _ => Language::Auto,
-    };
+    // Validate against the canonical Whisper language list. Unknown codes
+    // collapse to auto-detect rather than crashing or silently selecting the
+    // wrong language.
+    let language = Language::from_code(&lang).unwrap_or_else(Language::auto);
+    let whisper_code = language.to_whisper_code().map(String::from);
     state.update_settings(|s| {
         s.language = language;
     });
 
     // Propagate the selection to the whisper engine. Without this, the engine
     // keeps its default (`None` = auto-detect) regardless of the UI choice.
-    let whisper_code = language.to_whisper_code().map(String::from);
     state.whisper.set_language(whisper_code.clone());
     tracing::info!(
         "Whisper language set to: {}",

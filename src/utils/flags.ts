@@ -1,73 +1,40 @@
-// Maps each Language code to a circular country flag SVG bundled under
-// src/assets/flags/. Vite resolves these imports to hashed asset URLs at
-// build time so we only ship the 13 flags we actually reference. Source of
-// the SVGs: https://github.com/HatScripts/circle-flags (MIT, pre-masked to
-// a circle so no client-side cropping is needed).
+// Resolves a language code to its bundled circular flag SVG URL.
+// The actual language → country mapping (and the per-flag mic-icon tone)
+// lives in src/utils/languages.ts; this module just owns the static SVG
+// imports so Vite ships every referenced flag as a discrete asset.
 //
-// Country choices for ambiguous languages were confirmed with the user:
-// en → GB (United Kingdom), pt → PT. Adjust here if the convention changes.
+// Source of the SVGs: https://github.com/HatScripts/circle-flags (MIT,
+// pre-masked to a circle so no client-side cropping is needed).
 
-import flagGb from "../assets/flags/gb.svg";
-import flagFr from "../assets/flags/fr.svg";
-import flagEs from "../assets/flags/es.svg";
-import flagDe from "../assets/flags/de.svg";
-import flagIt from "../assets/flags/it.svg";
-import flagPt from "../assets/flags/pt.svg";
-import flagNl from "../assets/flags/nl.svg";
-import flagJp from "../assets/flags/jp.svg";
-import flagCn from "../assets/flags/cn.svg";
-import flagKr from "../assets/flags/kr.svg";
-import flagSa from "../assets/flags/sa.svg";
-import flagIn from "../assets/flags/in.svg";
-import flagPl from "../assets/flags/pl.svg";
+import { flagCountryFor, flagToneFor, type FlagIconTone } from "./languages";
 
-import type { Language } from "../stores/appStore";
+// Eager glob — Vite's recommended way to depend on every file in a folder
+// without having to maintain a hand-rolled import list. Using `?url`
+// returns the asset URL string for each match. With the project's
+// `assetsInlineLimit: 0` (vite.config.ts) every SVG is shipped as its own
+// hashed file under dist/assets/.
+const FLAG_MODULES = import.meta.glob("../assets/flags/*.svg", {
+  eager: true,
+  query: "?url",
+  import: "default",
+}) as Record<string, string>;
 
-// `auto` deliberately has no entry: callers fall back to the status-coloured
-// background when the lookup returns undefined.
-export const FLAG_URLS: Partial<Record<Language, string>> = {
-  en: flagGb,
-  fr: flagFr,
-  es: flagEs,
-  de: flagDe,
-  it: flagIt,
-  pt: flagPt,
-  nl: flagNl,
-  ja: flagJp,
-  zh: flagCn,
-  ko: flagKr,
-  ar: flagSa,
-  hi: flagIn,
-  pl: flagPl,
-};
-
-export function flagUrlFor(language: Language): string | undefined {
-  return FLAG_URLS[language];
+const FLAG_URL_BY_COUNTRY: Record<string, string> = {};
+for (const [path, url] of Object.entries(FLAG_MODULES)) {
+  // path looks like "../assets/flags/fr.svg"
+  const match = path.match(/\/([a-z-]+)\.svg$/i);
+  if (match) FLAG_URL_BY_COUNTRY[match[1].toLowerCase()] = url;
 }
 
-// Per-flag tone of the central area where the mic icon sits. `dark` means the
-// flag's centre is bright (white/yellow/orange) so a dark mic icon reads best;
-// `light` means the centre is dark (red/blue/green) so a white mic icon reads
-// best. Determined by inspection of each circle-flags SVG. Defaults to `light`
-// (matching the legacy white icon) for any unmapped or `auto` case.
-export type FlagIconTone = "light" | "dark";
-
-export const FLAG_ICON_TONE: Partial<Record<Language, FlagIconTone>> = {
-  en: "light", // UK Union Jack: red cross over navy, white mic reads well
-  fr: "dark",  // white centre stripe
-  es: "dark",  // yellow centre band
-  de: "light", // red centre band
-  it: "dark",  // white centre stripe
-  pt: "light", // crest sits over green/red boundary, mostly red behind icon
-  nl: "dark",  // white centre stripe
-  ja: "light", // red disc in centre
-  zh: "light", // red field everywhere
-  ko: "dark",  // white background with central swirl
-  ar: "light", // green field
-  hi: "dark",  // white centre band (chakra is small)
-  pl: "dark",  // mic sits at white/red boundary, lean dark for the white half
-};
-
-export function flagIconToneFor(language: Language): FlagIconTone {
-  return FLAG_ICON_TONE[language] ?? "light";
+/** Resolve the bundled flag URL for a language code, or undefined when
+ *  the language has no flag (Auto, regional/stateless languages). */
+export function flagUrlFor(language: string): string | undefined {
+  const country = flagCountryFor(language);
+  if (!country) return undefined;
+  return FLAG_URL_BY_COUNTRY[country];
 }
+
+// Re-export so call sites that already import from `./flags` keep
+// working without churn. New code should import directly from
+// `./languages`.
+export { flagToneFor, type FlagIconTone };

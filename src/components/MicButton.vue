@@ -3,7 +3,7 @@ import { computed, ref } from "vue";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useAppStore } from "../stores/appStore";
 import { useTauri, openSettings } from "../composables/useTauri";
-import { flagIconToneFor, flagUrlFor } from "../utils/flags";
+import { flagToneFor, flagUrlFor } from "../utils/flags";
 import VuMeter from "./VuMeter.vue";
 
 const store = useAppStore();
@@ -23,7 +23,7 @@ const hasFlag = computed(() => flagUrl.value !== undefined);
 // Bright-flag detection drives the mic icon colour: white on dark/colourful
 // flags, near-black on bright flags so the icon never disappears (e.g. the
 // French white centre stripe).
-const flagTone = computed(() => flagIconToneFor(store.settings.language));
+const flagTone = computed(() => flagToneFor(store.settings.language));
 const iconColor = computed(() => {
   if (!hasFlag.value) return "text-white";
   return flagTone.value === "dark" ? "text-gray-900" : "text-white";

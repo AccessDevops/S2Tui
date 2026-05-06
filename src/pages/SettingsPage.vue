@@ -7,6 +7,7 @@ import {
   ALL_LANGUAGES,
   LANGUAGE_DISPLAY_NAMES,
 } from "../stores/appStore";
+import { tierFor } from "../utils/languages";
 import { useTauri } from "../composables/useTauri";
 import { loadSettings, saveSettings, loadHistory, clearHistory as clearHistoryStore } from "../composables/useStore";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -502,6 +503,14 @@ function getBackendColor(backend: string | undefined): string {
                   class="w-4 h-4 rounded border-white/30 bg-white/10 text-mic-listening focus:ring-mic-listening focus:ring-offset-0"
                 />
                 <span class="text-white text-sm">{{ LANGUAGE_DISPLAY_NAMES[lang] }}</span>
+                <!-- Tier badge: surfaces Whisper's training-data quality
+                     so users know which non-mainstream languages may be
+                     less accurate. High tier (default) gets no badge. -->
+                <span
+                  v-if="tierFor(lang) === 'medium'"
+                  class="text-amber-300/70 text-[10px]"
+                  title="Medium-quality language (100–1000 h Whisper training data)"
+                >· medium</span>
               </label>
             </div>
             <p v-if="settings.favoriteLanguages.length < 2" class="text-amber-400 text-sm flex items-center gap-2">

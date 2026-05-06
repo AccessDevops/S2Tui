@@ -1,6 +1,6 @@
 import { load, Store } from "@tauri-apps/plugin-store";
 import type { Settings, HistoryEntry, ModelId } from "../stores/appStore";
-import { ALL_LANGUAGES } from "../stores/appStore";
+import { codesByTier } from "../utils/languages";
 
 const STORE_FILE = "settings.json";
 
@@ -12,6 +12,9 @@ export interface PersistedSettings extends Settings {
   welcomeDismissed: boolean;
 }
 
+// Default favourites = the high tier only. The full registry now exposes
+// ~60 languages, but cycling through all of them with a shortcut is
+// unwieldy out of the box; users opt extras in via the Settings checklist.
 const defaultSettings: PersistedSettings = {
   language: "auto",
   model: "large-v3-turbo",
@@ -19,7 +22,7 @@ const defaultSettings: PersistedSettings = {
   shortcut: "CommandOrControl+Shift+Space",
   languageToggleShortcut: "",
   modelToggleShortcut: "",
-  favoriteLanguages: [...ALL_LANGUAGES],
+  favoriteLanguages: codesByTier("high"),
   modelLanguages: {},
   history: [],
   vulkanWarningDismissed: false,

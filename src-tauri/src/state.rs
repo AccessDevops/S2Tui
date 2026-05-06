@@ -14,106 +14,77 @@ pub enum AppStatus {
     Error,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum Language {
-    #[default]
-    Auto,
-    En,
-    Fr,
-    Es,
-    De,
-    It,
-    Pt,
-    Nl,
-    Ja,
-    Zh,
-    Ko,
-    Ar,
-    Hi,
-    Pl,
-}
+/// All language codes Whisper actually understands. Kept as a static array
+/// so `is_known` is a cheap linear scan; ~99 entries is negligible. The
+/// frontend `src/utils/languages.ts` registry is the authoritative UI list
+/// (display names, flags, tier) — this set merely guards the boundary so
+/// junk codes never reach the Whisper engine. Keep both in sync when
+/// adding a language.
+pub const KNOWN_WHISPER_LANGUAGES: &[&str] = &[
+    "auto", // app-level sentinel for auto-detect
+    // High & medium tier (currently exposed in the UI)
+    "ar", "az", "be", "bg", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa",
+    "fi", "fr", "gl", "gu", "he", "hi", "hr", "hu", "hy", "id", "is", "it", "ja", "ka", "kk", "km",
+    "ko", "lo", "lt", "lv", "mk", "ml", "mn", "mr", "ms", "mt", "my", "ne", "nl", "no", "pl", "pt",
+    "ro", "ru", "sk", "sl", "sq", "sr", "sv", "sw", "ta", "te", "th", "tr", "uk", "ur", "vi", "zh",
+    // Low tier (Whisper-supported but not yet surfaced in the UI). Listed
+    // here so a power-user manually editing settings.json can still get a
+    // valid Language; the frontend will simply have no flag/display name.
+    "af", "am", "as", "ba", "bn", "bo", "br", "fo", "ha", "haw", "ht", "jw", "kn", "la", "lb", "ln",
+    "mg", "mi", "nn", "oc", "pa", "ps", "sa", "sd", "si", "sn", "so", "su", "tg", "tk", "tl", "tt",
+    "uz", "yi", "yo",
+];
+
+/// Persisted/serialised language code. Newtype around `String` so we keep
+/// type-safety at call sites without locking ourselves into a closed enum
+/// when we add languages. `#[serde(transparent)]` keeps the on-disk wire
+/// format identical to the previous enum (`#[serde(rename_all = "lowercase")]`),
+/// so existing settings.json files migrate without touching the user.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Language(pub String);
 
 impl Language {
+    /// The auto-detect sentinel.
+    pub fn auto() -> Self {
+        Self("auto".to_string())
+    }
+
     /// ISO 639-1 code expected by whisper-rs. `None` means auto-detect.
-    pub fn to_whisper_code(self) -> Option<&'static str> {
-        match self {
-            Language::Auto => None,
-            Language::En => Some("en"),
-            Language::Fr => Some("fr"),
-            Language::Es => Some("es"),
-            Language::De => Some("de"),
-            Language::It => Some("it"),
-            Language::Pt => Some("pt"),
-            Language::Nl => Some("nl"),
-            Language::Ja => Some("ja"),
-            Language::Zh => Some("zh"),
-            Language::Ko => Some("ko"),
-            Language::Ar => Some("ar"),
-            Language::Hi => Some("hi"),
-            Language::Pl => Some("pl"),
+    pub fn to_whisper_code(&self) -> Option<&str> {
+        if self.0 == "auto" {
+            None
+        } else {
+            Some(self.0.as_str())
         }
     }
 
-    /// All language variants (for UI listings and defaults).
-    pub fn all() -> Vec<Language> {
-        vec![
-            Language::Auto,
-            Language::En,
-            Language::Fr,
-            Language::Es,
-            Language::De,
-            Language::It,
-            Language::Pt,
-            Language::Nl,
-            Language::Ja,
-            Language::Zh,
-            Language::Ko,
-            Language::Ar,
-            Language::Hi,
-            Language::Pl,
-        ]
+    /// Stable serialization code (the same string we store on disk).
+    pub fn to_code(&self) -> &str {
+        &self.0
     }
 
-    /// Stable serialization code (matches the lowercase serde tag, including "auto").
-    pub fn to_code(self) -> &'static str {
-        match self {
-            Language::Auto => "auto",
-            Language::En => "en",
-            Language::Fr => "fr",
-            Language::Es => "es",
-            Language::De => "de",
-            Language::It => "it",
-            Language::Pt => "pt",
-            Language::Nl => "nl",
-            Language::Ja => "ja",
-            Language::Zh => "zh",
-            Language::Ko => "ko",
-            Language::Ar => "ar",
-            Language::Hi => "hi",
-            Language::Pl => "pl",
-        }
-    }
-
-    /// Parse a language from its serialization code; returns `None` if unknown.
+    /// Construct a `Language` from a code, returning `None` if it's not in
+    /// the known Whisper language list. Use this on every untrusted input
+    /// (Tauri command args, persisted settings) so we never feed garbage
+    /// to the Whisper engine.
     pub fn from_code(code: &str) -> Option<Language> {
-        match code {
-            "auto" => Some(Language::Auto),
-            "en" => Some(Language::En),
-            "fr" => Some(Language::Fr),
-            "es" => Some(Language::Es),
-            "de" => Some(Language::De),
-            "it" => Some(Language::It),
-            "pt" => Some(Language::Pt),
-            "nl" => Some(Language::Nl),
-            "ja" => Some(Language::Ja),
-            "zh" => Some(Language::Zh),
-            "ko" => Some(Language::Ko),
-            "ar" => Some(Language::Ar),
-            "hi" => Some(Language::Hi),
-            "pl" => Some(Language::Pl),
-            _ => None,
+        if Self::is_known(code) {
+            Some(Self(code.to_string()))
+        } else {
+            None
         }
+    }
+
+    /// `true` if `code` is a recognised Whisper language code (or `auto`).
+    pub fn is_known(code: &str) -> bool {
+        KNOWN_WHISPER_LANGUAGES.contains(&code)
+    }
+}
+
+impl Default for Language {
+    fn default() -> Self {
+        Self::auto()
     }
 }
 
@@ -129,7 +100,9 @@ pub struct Settings {
     #[serde(default)]
     pub model_toggle_shortcut: String,
     /// Languages the user wants to cycle through with the language shortcut.
-    #[serde(default = "Language::all")]
+    /// Defaults to empty here — the frontend pushes its own default set
+    /// (the `high` tier from `src/utils/languages.ts`) at init time.
+    #[serde(default)]
     pub favorite_languages: Vec<Language>,
     /// Per-model language whitelist. Key = model name (e.g. "large-v3-turbo").
     /// A model that's missing from this map is treated as supporting every
@@ -141,12 +114,12 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            language: Language::Auto,
+            language: Language::auto(),
             model: "large-v3-turbo".to_string(),
             shortcut: "CommandOrControl+Shift+Space".to_string(),
             language_toggle_shortcut: String::new(),
             model_toggle_shortcut: String::new(),
-            favorite_languages: Language::all(),
+            favorite_languages: Vec::new(),
             model_languages: HashMap::new(),
         }
     }
@@ -241,28 +214,50 @@ mod tests {
 
     #[test]
     fn auto_maps_to_none() {
-        assert_eq!(Language::Auto.to_whisper_code(), None);
+        assert_eq!(Language::auto().to_whisper_code(), None);
     }
 
     #[test]
     fn languages_map_to_iso_codes() {
-        assert_eq!(Language::En.to_whisper_code(), Some("en"));
-        assert_eq!(Language::Fr.to_whisper_code(), Some("fr"));
-        assert_eq!(Language::Ja.to_whisper_code(), Some("ja"));
-        assert_eq!(Language::Pl.to_whisper_code(), Some("pl"));
+        assert_eq!(
+            Language::from_code("en").unwrap().to_whisper_code(),
+            Some("en")
+        );
+        assert_eq!(
+            Language::from_code("fr").unwrap().to_whisper_code(),
+            Some("fr")
+        );
+        assert_eq!(
+            Language::from_code("ja").unwrap().to_whisper_code(),
+            Some("ja")
+        );
+        assert_eq!(
+            Language::from_code("lv").unwrap().to_whisper_code(),
+            Some("lv")
+        );
     }
 
     #[test]
-    fn all_languages_count() {
-        // 14 = Auto + 13 supported language codes — keep this test in sync if more
-        // languages are added so the UI listings stay coherent.
-        assert_eq!(Language::all().len(), 14);
+    fn known_set_includes_auto_and_high_tier() {
+        assert!(Language::is_known("auto"));
+        for code in ["en", "fr", "es", "de", "ja", "zh", "ru", "ar"] {
+            assert!(Language::is_known(code), "{code} should be known");
+        }
     }
 
     #[test]
-    fn to_code_round_trips_via_from_code() {
-        for lang in Language::all() {
-            assert_eq!(Language::from_code(lang.to_code()), Some(lang));
+    fn known_set_includes_medium_tier_user_added() {
+        // Latvian was the prototype case for adding non-mainstream languages.
+        for code in ["lv", "lt", "et", "ro", "hu", "th", "vi"] {
+            assert!(Language::is_known(code), "{code} should be known");
+        }
+    }
+
+    #[test]
+    fn from_code_round_trips() {
+        for code in ["auto", "en", "fr", "lv"] {
+            let lang = Language::from_code(code).unwrap();
+            assert_eq!(lang.to_code(), code);
         }
     }
 
@@ -270,5 +265,6 @@ mod tests {
     fn from_code_rejects_unknown() {
         assert_eq!(Language::from_code("zz"), None);
         assert_eq!(Language::from_code(""), None);
+        assert_eq!(Language::from_code("not-a-code"), None);
     }
 }
