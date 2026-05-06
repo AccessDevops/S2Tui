@@ -16,6 +16,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Text insertion now works on Windows and Linux via clipboard + Ctrl+V simulation
 
+## [0.1.6] - 2026-05-06
+
+### Added
+- Optional global shortcut to cycle between favorite languages without
+  opening Settings.
+- Optional global shortcut to cycle between downloaded models. When the
+  next model doesn't support the active language, the language auto-bumps
+  to the first favorite that model accepts.
+- Per-model language whitelist in Settings. The language cycle stays within
+  the languages enabled on the currently selected model — the model is
+  sticky and never switches via the language shortcut.
+- Visual language indicator on the mic button: round country flag for the
+  active language, replaced by a thick coloured ring to convey
+  listening/processing/error state. Mic icon colour adapts to flag
+  brightness.
+
+### Fixed
+- Cross-window settings sync. Toggle-shortcut mutations from the main
+  window now reflect live in the open Settings window (and vice versa)
+  via a `settings:updated` Tauri event. The two windows used to keep
+  separate Pinia stores so the shortcut listener could read stale
+  favourites and cycle through 14 languages instead of the 2 selected.
+- Race in `setLanguage`/`setModel` that broadcast the cross-window event
+  before persisting to disk, causing the language toggle to look like it
+  needed two presses.
+- Toast notifications above the mic button now wrap onto multiple lines
+  (max-width 84 px, font 10 px, leading-tight) so messages fit inside the
+  90×100 px overlay window without truncation.
+
+### Changed
+- Release workflow rewritten to be tag-driven, idempotent and to produce
+  a single GitHub Release per tag with the full artifact set
+  (macOS arm64 dmg, macOS x64 dmg, Windows NSIS exe, MSI, portable zip,
+  Linux deb, RPM, portable tar.gz). Previous flow could produce two
+  releases when a cancelled run left a draft behind.
+- `src-tauri/.cargo/config.toml` documents that `[target.cfg.env]` is
+  silently ignored by cargo. `CMAKE_GENERATOR=Ninja` for Windows is now
+  set in the CI step instead of the cargo config.
+
 ## [0.1.5] - 2026-05-05
 
 ### Fixed
