@@ -130,14 +130,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download Whisper models
-        shell: bash
-        run: |
-          mkdir -p src-tauri/models
-          curl -L -o src-tauri/models/ggml-small.bin \
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin"
-          curl -L -o src-tauri/models/ggml-large-v3-turbo.bin \
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
+      # Whisper models are no longer bundled — the app downloads them
+      # from the `models-v1` GitHub Release on first launch (issue #2,
+      # step 1). The earlier `curl` of the q5_x quantised builds from
+      # Hugging Face is intentionally removed: it shaves ~728 MB off
+      # every artifact and a few minutes off every build.
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

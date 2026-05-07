@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from "vue";
+import { ref, onMounted, onUnmounted, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { emit } from "@tauri-apps/api/event";
+import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { SystemHealth } from "../stores/appStore";
 
@@ -9,6 +9,48 @@ const systemHealth = ref<SystemHealth | null>(null);
 const isLoading = ref(true);
 const dontShowAgain = ref(false);
 const emailCopied = ref(false);
+
+// First-launch model-download state. Populated from
+// `list_required_models` on mount; updated by Tauri events emitted by
+// the main window's download orchestrator. The "Get started" CTA stays
+// disabled until every entry reaches `done` so the user can't dismiss
+// the welcome window while their app is still unusable.
+interface DownloadItem {
+  id: string;
+  displayName: string;
+  sizeBytes: number;
+  bytesReceived: number;
+  percent: number;
+  status: "pending" | "downloading" | "done" | "error";
+  errorMessage?: string;
+}
+interface RequiredModelInfo {
+  id: string;
+  displayName: string;
+  filename: string;
+  sizeBytes: number;
+  url: string;
+  present: boolean;
+}
+const downloadItems = ref<DownloadItem[]>([]);
+const allDownloadsDone = computed(
+  () =>
+    downloadItems.value.length === 0 ||
+    downloadItems.value.every((i) => i.status === "done"),
+);
+const anyDownloadFailed = computed(() =>
+  downloadItems.value.some((i) => i.status === "error"),
+);
+
+let unlistenProgress: UnlistenFn | null = null;
+let unlistenComplete: UnlistenFn | null = null;
+let unlistenError: UnlistenFn | null = null;
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 onMounted(async () => {
   try {
@@ -18,6 +60,65 @@ onMounted(async () => {
   } finally {
     isLoading.value = false;
   }
+
+  // Pull the list of required models. The ones currently missing will
+  // be downloaded by the main window — we just render their progress.
+  try {
+    const required = await invoke<RequiredModelInfo[]>("list_required_models");
+    downloadItems.value = required
+      .filter((m) => !m.present)
+      .map((m) => ({
+        id: m.id,
+        displayName: m.displayName,
+        sizeBytes: m.sizeBytes,
+        bytesReceived: 0,
+        percent: 0,
+        status: "pending" as const,
+      }));
+  } catch {
+    // If we can't even ask the backend, leave the section empty —
+    // the user just sees the welcome content as before.
+  }
+
+  unlistenProgress = await listen<{
+    model: string;
+    bytesReceived: number;
+    totalBytes: number;
+    percent: number;
+  }>("model:download:progress", (e) => {
+    const it = downloadItems.value.find((i) => i.id === e.payload.model);
+    if (it) {
+      it.status = "downloading";
+      it.bytesReceived = e.payload.bytesReceived;
+      it.percent = e.payload.percent;
+    }
+  });
+  unlistenComplete = await listen<{ model: string }>(
+    "model:download:complete",
+    (e) => {
+      const it = downloadItems.value.find((i) => i.id === e.payload.model);
+      if (it) {
+        it.status = "done";
+        it.percent = 100;
+      }
+    },
+  );
+  unlistenError = await listen<{ model: string; message: string }>(
+    "model:download:error",
+    (e) => {
+      const it = downloadItems.value.find((i) => i.id === e.payload.model);
+      if (it) {
+        it.status = "error";
+        it.errorMessage = e.payload.message;
+      }
+    },
+  );
+});
+
+onUnmounted(() => {
+  unlistenProgress?.();
+  unlistenComplete?.();
+  unlistenError?.();
 });
 
 const gpuEnabled = computed(() => {
@@ -273,14 +374,70 @@ function handleDragStart(event: MouseEvent) {
             </button>
           </div>
 
+          <!-- First-launch model download (only renders when at least
+               one Whisper model is missing on disk). Models are no longer
+               bundled with the app — they're fetched from the
+               `models-v1` GitHub Release on demand. The Get Started
+               button stays disabled while the downloads are running. -->
+          <div
+            v-if="downloadItems.length > 0"
+            class="mb-3 p-3 rounded-xl bg-white/5 border border-white/10 space-y-2"
+          >
+            <div>
+              <h3 class="text-white text-sm font-semibold">Setting up speech recognition</h3>
+              <p class="text-white/50 text-xs">First-time download — needed once. Total ~728 MB.</p>
+            </div>
+            <div
+              v-for="item in downloadItems"
+              :key="item.id"
+              class="space-y-1"
+            >
+              <div class="flex items-center justify-between text-xs">
+                <span class="text-white">{{ item.displayName }}</span>
+                <span class="text-white/40">
+                  <span v-if="item.status === 'pending'">Pending</span>
+                  <span v-else-if="item.status === 'downloading'">
+                    {{ formatBytes(item.bytesReceived) }} / {{ formatBytes(item.sizeBytes) }}
+                    ({{ item.percent }}%)
+                  </span>
+                  <span v-else-if="item.status === 'done'" class="text-green-400">Done</span>
+                  <span v-else-if="item.status === 'error'" class="text-red-400">Failed</span>
+                </span>
+              </div>
+              <div class="h-1.5 rounded-full bg-white/10 overflow-hidden">
+                <div
+                  class="h-full transition-all"
+                  :class="item.status === 'error' ? 'bg-red-500' : 'bg-blue-500'"
+                  :style="{ width: `${item.percent}%` }"
+                ></div>
+              </div>
+              <p v-if="item.errorMessage" class="text-red-400 text-xs">
+                {{ item.errorMessage }}
+              </p>
+            </div>
+            <p
+              v-if="anyDownloadFailed"
+              class="text-amber-300/80 text-xs pt-1"
+            >
+              A download failed. Restart the app to retry.
+            </p>
+          </div>
+
           <!-- Actions -->
           <div class="flex flex-col gap-2">
             <button
               type="button"
-              @click="closeWindow"
-              class="w-full px-4 py-2.5 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white rounded-xl font-medium transition-all shadow-lg shadow-blue-500/25 text-sm"
+              :disabled="!allDownloadsDone"
+              @click="allDownloadsDone && closeWindow()"
+              :class="[
+                'w-full px-4 py-2.5 rounded-xl font-medium transition-all shadow-lg text-sm',
+                allDownloadsDone
+                  ? 'bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white shadow-blue-500/25'
+                  : 'bg-white/10 text-white/40 cursor-not-allowed',
+              ]"
             >
-              Get Started
+              <span v-if="downloadItems.length === 0 || allDownloadsDone">Get Started</span>
+              <span v-else>Downloading models…</span>
             </button>
             <label class="flex items-center justify-center gap-2 cursor-pointer py-1">
               <input

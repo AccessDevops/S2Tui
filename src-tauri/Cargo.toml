@@ -34,6 +34,13 @@ thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# Streaming HTTP downloader for the Whisper models (no longer bundled —
+# fetched from a GitHub Release on first launch). `rustls-tls` avoids
+# the OpenSSL system dependency on Linux.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# SHA-256 of downloaded models against a hash hard-coded in MODEL_REGISTRY.
+sha2 = "0.10"
+
 # Audio capture
 cpal = "0.15"
 

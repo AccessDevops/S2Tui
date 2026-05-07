@@ -2,21 +2,74 @@ use crate::audio::AudioChunk;
 use crate::state::{AppState, AppStatus, Language, Permissions};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
 #[allow(unused_imports)]
 use tauri::{AppHandle, Emitter, Manager, State};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
-/// Get the models directory path
-/// In dev mode: uses src-tauri/models/ in the project directory
-/// In release mode: uses the bundled resources directory
-fn get_models_dir(_app: &AppHandle) -> Result<PathBuf, String> {
+/// Static description of every Whisper model the app knows how to fetch.
+/// Each entry maps a short model id (the same one we persist in settings
+/// and pass to whisper-rs) to its canonical filename, the public URL of
+/// the bundled GitHub Release `models-v1` and the SHA-256 of the file
+/// hosted there. Keep this in sync with the GitHub Release contents — if
+/// you re-cut `models-v1` you must update both the URL tag (if you
+/// rename it) and the SHA below.
+struct ModelEntry {
+    /// The id we accept in commands and store in settings.
+    id: &'static str,
+    /// Canonical filename inside `<app_data_dir>/models/` (and inside the
+    /// dev-mode `src-tauri/models/` folder).
+    filename: &'static str,
+    /// Stable public URL on the `models-v1` GitHub Release.
+    url: &'static str,
+    /// Hex-encoded SHA-256 of the file at `url`. Verified after every
+    /// download; mismatch deletes the partial file and surfaces an error.
+    sha256: &'static str,
+    /// Human-friendly label used in download progress events / UI.
+    display_name: &'static str,
+    /// Total size in bytes (used for progress when the response doesn't
+    /// expose a Content-Length, e.g. transparently-compressed responses).
+    size_bytes: u64,
+}
+
+const MODEL_REGISTRY: &[ModelEntry] = &[
+    ModelEntry {
+        id: "small",
+        filename: "ggml-small.bin",
+        url: "https://github.com/AccessDevops/S2Tui/releases/download/models-v1/ggml-small.bin",
+        sha256: "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
+        display_name: "Small",
+        size_bytes: 190085487,
+    },
+    ModelEntry {
+        id: "large-v3-turbo",
+        filename: "ggml-large-v3-turbo.bin",
+        url: "https://github.com/AccessDevops/S2Tui/releases/download/models-v1/ggml-large-v3-turbo.bin",
+        sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+        display_name: "Large V3 Turbo",
+        size_bytes: 601463531,
+    },
+];
+
+/// Resolve the directory in which Whisper models live.
+///
+/// Dev mode (`#[cfg(debug_assertions)]`) keeps reading `src-tauri/models/`
+/// directly so a maintainer who already has the bins on disk doesn't have
+/// to re-download anything.
+///
+/// Release mode now points at `<app_data_dir>/models/` — a writable
+/// per-user directory created on demand. Models are *no longer* shipped
+/// inside the bundle's `Resources/`; the app downloads them on first
+/// launch via `download_model` (see below), so the directory is the
+/// single mutable cache.
+fn get_models_dir(app: &AppHandle) -> Result<PathBuf, String> {
     #[cfg(debug_assertions)]
     {
-        // Dev mode: use local models folder
+        let _ = app; // unused in dev mode
         let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
-        tracing::debug!("Executable path: {}", exe_path.display());
         let project_root = exe_path
             .parent() // target/debug
             .and_then(|p| p.parent()) // target
@@ -28,35 +81,18 @@ fn get_models_dir(_app: &AppHandle) -> Result<PathBuf, String> {
     }
     #[cfg(not(debug_assertions))]
     {
-        // Release mode: use bundled resources directory
-        let resource_dir = _app.path().resource_dir().map_err(|e| e.to_string())?;
-        tracing::info!("[RELEASE] Resource directory: {}", resource_dir.display());
-        let models_dir = resource_dir.join("models");
+        let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        let models_dir = app_data.join("models");
+        if !models_dir.exists() {
+            std::fs::create_dir_all(&models_dir).map_err(|e| {
+                format!(
+                    "Failed to create models dir {}: {}",
+                    models_dir.display(),
+                    e
+                )
+            })?;
+        }
         tracing::info!("[RELEASE] Models directory: {}", models_dir.display());
-
-        // Debug: list contents of resource dir
-        if let Ok(entries) = std::fs::read_dir(&resource_dir) {
-            tracing::info!("[RELEASE] Contents of resource_dir:");
-            for entry in entries.flatten() {
-                tracing::info!("  - {}", entry.path().display());
-            }
-        }
-
-        // Debug: list contents of models dir if it exists
-        if models_dir.exists() {
-            if let Ok(entries) = std::fs::read_dir(&models_dir) {
-                tracing::info!("[RELEASE] Contents of models_dir:");
-                for entry in entries.flatten() {
-                    tracing::info!("  - {}", entry.path().display());
-                }
-            }
-        } else {
-            tracing::warn!(
-                "[RELEASE] Models directory does not exist: {}",
-                models_dir.display()
-            );
-        }
-
         Ok(models_dir)
     }
 }
@@ -665,4 +701,183 @@ pub async fn load_whisper_model_with_options(
     );
 
     Ok(result)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequiredModelInfo {
+    pub id: String,
+    pub display_name: String,
+    pub filename: String,
+    pub size_bytes: u64,
+    pub url: String,
+    pub present: bool,
+}
+
+/// List the models the app expects to find on disk, with a `present`
+/// flag the frontend can use to decide whether to show the first-launch
+/// download dialog. The order matches MODEL_REGISTRY (small first, then
+/// large) so the dialog walks them sequentially.
+#[tauri::command]
+pub fn list_required_models(app: AppHandle) -> Result<Vec<RequiredModelInfo>, String> {
+    let models_dir = get_models_dir(&app)?;
+    let mut out = Vec::with_capacity(MODEL_REGISTRY.len());
+    for entry in MODEL_REGISTRY {
+        let path = models_dir.join(entry.filename);
+        out.push(RequiredModelInfo {
+            id: entry.id.to_string(),
+            display_name: entry.display_name.to_string(),
+            filename: entry.filename.to_string(),
+            size_bytes: entry.size_bytes,
+            url: entry.url.to_string(),
+            present: path.is_file(),
+        });
+    }
+    Ok(out)
+}
+
+/// Download a Whisper model into the app's models directory, streaming
+/// the response so we can emit progress events to the frontend in
+/// near-realtime. The file lands in a `.partial` sibling first, gets
+/// SHA-256 verified, then is atomically renamed to its final name.
+///
+/// Events emitted (all carry the model id so the UI can route correctly
+/// when several downloads run sequentially):
+/// - `model:download:progress`  { model, bytesReceived, totalBytes, percent }
+/// - `model:download:complete`  { model, path }
+/// - `model:download:error`     { model, message }
+#[tauri::command]
+pub async fn download_model(model: String, app: AppHandle) -> Result<(), String> {
+    let entry = MODEL_REGISTRY
+        .iter()
+        .find(|e| e.id == model)
+        .ok_or_else(|| format!("Unknown model id: {}", model))?;
+
+    let models_dir = get_models_dir(&app)?;
+    let final_path = models_dir.join(entry.filename);
+    let partial_path = models_dir.join(format!("{}.partial", entry.filename));
+
+    tracing::info!(
+        "Downloading model '{}' from {} -> {}",
+        entry.id,
+        entry.url,
+        final_path.display()
+    );
+
+    // Helper: emit a typed error event and propagate as Result::Err.
+    let emit_error = |app: &AppHandle, msg: &str| -> String {
+        let _ = app.emit(
+            "model:download:error",
+            serde_json::json!({ "model": entry.id, "message": msg }),
+        );
+        msg.to_string()
+    };
+
+    // Inline async block lets us use `?` and still funnel every error
+    // through the same `model:download:error` emitter.
+    let do_download = async {
+        // Sanity: clear any leftover partial from a previous interrupted run.
+        if partial_path.exists() {
+            tokio::fs::remove_file(&partial_path)
+                .await
+                .map_err(|e| format!("Failed to clear stale .partial: {}", e))?;
+        }
+
+        let client = reqwest::Client::builder()
+            .build()
+            .map_err(|e| format!("HTTP client init failed: {}", e))?;
+        let mut response = client
+            .get(entry.url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {}", e))?;
+
+        if !response.status().is_success() {
+            return Err(format!("HTTP {} from server", response.status()));
+        }
+
+        // Prefer Content-Length if the redirected CDN exposes it; fall
+        // back to the registry's size_bytes so the progress bar still
+        // moves predictably even when the server doesn't tell us.
+        let total_bytes = response.content_length().unwrap_or(entry.size_bytes);
+
+        let mut file = tokio::fs::File::create(&partial_path)
+            .await
+            .map_err(|e| format!("Failed to open temp file: {}", e))?;
+        let mut hasher = Sha256::new();
+        let mut downloaded: u64 = 0;
+        let mut last_pct: u8 = u8::MAX;
+
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| format!("Network read error: {}", e))?
+        {
+            file.write_all(&chunk)
+                .await
+                .map_err(|e| format!("Disk write error: {}", e))?;
+            hasher.update(&chunk);
+            downloaded = downloaded.saturating_add(chunk.len() as u64);
+
+            let pct = if total_bytes > 0 {
+                ((downloaded.min(total_bytes) * 100) / total_bytes) as u8
+            } else {
+                0
+            };
+            // Throttle: only emit when integer percent advances, plus one
+            // last update at end. Avoids flooding the bridge with hundreds
+            // of events for a 547 MB file.
+            if pct != last_pct {
+                last_pct = pct;
+                let _ = app.emit(
+                    "model:download:progress",
+                    serde_json::json!({
+                        "model": entry.id,
+                        "bytesReceived": downloaded,
+                        "totalBytes": total_bytes,
+                        "percent": pct,
+                    }),
+                );
+            }
+        }
+
+        file.flush()
+            .await
+            .map_err(|e| format!("Failed to flush temp file: {}", e))?;
+        drop(file);
+
+        // SHA-256 verification — protects against partial transfers and
+        // bit-flips. Mismatch is a hard error: we'd rather fail loud than
+        // hand a corrupt model to whisper.cpp.
+        let actual = format!("{:x}", hasher.finalize());
+        if actual != entry.sha256 {
+            tokio::fs::remove_file(&partial_path).await.ok();
+            return Err(format!(
+                "Checksum mismatch (expected {}, got {})",
+                entry.sha256, actual
+            ));
+        }
+
+        tokio::fs::rename(&partial_path, &final_path)
+            .await
+            .map_err(|e| format!("Failed to finalize download: {}", e))?;
+        Ok(final_path.clone())
+    };
+
+    match do_download.await {
+        Ok(path) => {
+            tracing::info!("Model '{}' downloaded to {}", entry.id, path.display());
+            let _ = app.emit(
+                "model:download:complete",
+                serde_json::json!({ "model": entry.id, "path": path.display().to_string() }),
+            );
+            Ok(())
+        }
+        Err(msg) => {
+            tracing::error!("Model '{}' download failed: {}", entry.id, msg);
+            // Belt-and-braces: clean any leftover partial.
+            let _ = tokio::fs::remove_file(&partial_path).await;
+            Err(emit_error(&app, &msg))
+        }
+    }
 }

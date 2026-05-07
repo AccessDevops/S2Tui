@@ -82,13 +82,40 @@ Settings are stored at:
 
 ## Whisper Models
 
-Models are stored in `src-tauri/models/` with naming convention `ggml-{model}.bin`:
-- Default model: `large-v3-turbo`
-- Available: small, large-v3-turbo
+Filename convention: `ggml-{model}.bin`. The two models the app currently
+ships with: `small` and `large-v3-turbo`. Default is `large-v3-turbo`.
 
-Models are downloaded from Hugging Face during CI/CD and bundled with the application. For local development, download the quantized versions and rename them:
+**Models are no longer bundled with release artifacts.** Each app build
+installs at ~50–80 MB; the models (~728 MB combined) are hosted on the
+dedicated `models-v1` GitHub Release of this repo and **downloaded by the
+app on first launch** (or whenever a model file is missing). The Welcome
+window shows a progress bar during the download and gates its "Get
+Started" button until everything is present.
+
+- Stable model URLs:
+  - `https://github.com/AccessDevops/S2Tui/releases/download/models-v1/ggml-small.bin`
+  - `https://github.com/AccessDevops/S2Tui/releases/download/models-v1/ggml-large-v3-turbo.bin`
+- Storage location at runtime (path derived from `bundle.identifier` in
+  `tauri.conf.json` = `com.accessdevops.s2tui`):
+  - macOS: `~/Library/Application Support/com.accessdevops.s2tui/models/`
+  - Linux: `~/.local/share/com.accessdevops.s2tui/models/`
+  - Windows: `%APPDATA%\com.accessdevops.s2tui\models\`
+- The `models-v1` GitHub Release is **load-bearing** — do not delete it.
+- Adding a new model = upload the file to that release, then add an entry
+  to `MODEL_REGISTRY` in `src-tauri/src/commands.rs` (id, filename, URL,
+  SHA-256, size) and the new id will appear automatically.
+
+For local development, the **dev mode keeps reading from
+`src-tauri/models/`** (unchanged from before) so a maintainer who
+already has the binaries doesn't have to wait on the auto-download path.
+If you don't have them locally, fetch them from the `models-v1` release
+or from Hugging Face and rename:
+
 ```bash
 # Example for small model
+curl -L -o src-tauri/models/ggml-small.bin \
+  https://github.com/AccessDevops/S2Tui/releases/download/models-v1/ggml-small.bin
+# Or from upstream Hugging Face (same content):
 curl -L -o src-tauri/models/ggml-small.bin \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin
 ```

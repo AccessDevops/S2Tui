@@ -131,8 +131,8 @@ export const useAppStore = defineStore("app", () => {
 
   // Bundled models only
   const models = ref<ModelInfo[]>([
-    { id: "small", name: "Small (Fast)", size: "190 MB", downloaded: true, downloading: false, progress: 100, bundled: true },
-    { id: "large-v3-turbo", name: "Large V3 Turbo (Best)", size: "547 MB", downloaded: true, downloading: false, progress: 100, bundled: true },
+    { id: "small", name: "Small (Fast)", size: "190 MB", downloaded: true, downloading: false, progress: 100, bundled: false },
+    { id: "large-v3-turbo", name: "Large V3 Turbo (Best)", size: "547 MB", downloaded: true, downloading: false, progress: 100, bundled: false },
   ]);
 
   const history = ref<HistoryEntry[]>([]);

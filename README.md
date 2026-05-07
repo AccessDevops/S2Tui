@@ -39,15 +39,21 @@ Please check the [Release](https://github.com/AccessDevops/S2Tui/releases)
 # Install dependencies
 npm install
 
-# Download Whisper model (simplified naming without quantization suffix)
+# Whisper models for local dev (recommended — saves you from the
+# in-app auto-download every time you wipe the build).
+# Models are downloaded by released apps from the models-v1 GitHub
+# Release; in dev mode, the app reads them from src-tauri/models/
+# directly.
 mkdir -p src-tauri/models
 curl -L -o src-tauri/models/ggml-small.bin \
-  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin
+  https://github.com/AccessDevops/S2Tui/releases/download/models-v1/ggml-small.bin
+curl -L -o src-tauri/models/ggml-large-v3-turbo.bin \
+  https://github.com/AccessDevops/S2Tui/releases/download/models-v1/ggml-large-v3-turbo.bin
 
 # Run
 npm run tauri dev
 
-# Build
+# Build (no model bundling; produced binary downloads them on first launch)
 npm run tauri build
 ```
 

@@ -375,7 +375,7 @@ export function useTauri() {
       }
 
       // Detect actually available models on disk (not just persisted state)
-      const availableModels = await getAvailableModels();
+      let availableModels = await getAvailableModels();
 
       // Reset all models to not downloaded first
       for (const model of store.models) {
@@ -391,6 +391,25 @@ export function useTauri() {
       const history = await loadHistory();
       store.setHistory(history);
 
+      // Ask the backend which models the app needs and which are missing.
+      // Models are no longer bundled with the app — they get downloaded on
+      // first launch from the `models-v1` GitHub Release.
+      interface RequiredModelInfo {
+        id: string;
+        displayName: string;
+        filename: string;
+        sizeBytes: number;
+        url: string;
+        present: boolean;
+      }
+      let missingModels: RequiredModelInfo[] = [];
+      try {
+        const required = await invoke<RequiredModelInfo[]>("list_required_models");
+        missingModels = required.filter((m) => !m.present);
+      } catch (err) {
+        console.error("Failed to query required models:", err);
+      }
+
       // Show Vulkan warning if:
       // - We checked system health
       // - Vulkan is not available
@@ -404,26 +423,57 @@ export function useTauri() {
         !persisted.vulkanWarningDismissed &&
         systemHealth.osInfo.platform !== "macos");
 
+      // Welcome window also doubles as the model-download UI on first launch.
+      // Force-open it whenever a model is missing, regardless of whether the
+      // user previously dismissed it — they need the progress feedback.
       if (shouldShowVulkanWarning) {
-        // Show Vulkan warning first - Welcome modal will be shown when it closes
         store.openVulkanWarningModal();
-      } else if (!persisted.welcomeDismissed) {
-        // No Vulkan warning needed - show welcome directly
+      } else if (!persisted.welcomeDismissed || missingModels.length > 0) {
         store.openWelcomeModal();
       }
 
-      // Load the whisper model if available
-      if (availableModels.includes(persisted.model)) {
-        try {
-          // On Windows/Linux without Vulkan, force CPU mode
-          // On macOS, Metal is always available so we never force CPU
-          const forceCpu = systemHealth && !systemHealth.vulkanAvailable && systemHealth.osInfo.platform !== "macos";
+      // Sequentially download every missing model in the background. The
+      // welcome window subscribes to `model:download:*` events to render
+      // the progress bars and gates its "Get started" button on completion.
+      // We deliberately don't await this — the user shouldn't be staring at
+      // a frozen screen, and the loadWhisperModel below will be retried
+      // after the download succeeds.
+      const startDownloads = (async () => {
+        for (const m of missingModels) {
+          try {
+            await invoke("download_model", { model: m.id });
+          } catch (err) {
+            console.error(`Model ${m.id} download failed:`, err);
+            return; // stop the chain, leave the rest pending
+          }
+        }
+      })();
 
-          // Use the load function with GPU/CPU control
+      // Decide whether the model can be loaded right now.
+      const tryLoadCurrentModel = async () => {
+        // Refresh the available list — a download may have just landed.
+        availableModels = await getAvailableModels();
+        for (const id of availableModels) {
+          store.setModelDownloaded(id as ModelId, true);
+        }
+        if (!availableModels.includes(persisted.model)) return;
+        try {
+          const forceCpu =
+            systemHealth &&
+            !systemHealth.vulkanAvailable &&
+            systemHealth.osInfo.platform !== "macos";
           await loadWhisperModelWithOptions(persisted.model, forceCpu ?? false);
         } catch {
           // Model loading failed, user can select model in settings
         }
+      };
+
+      if (missingModels.length === 0) {
+        await tryLoadCurrentModel();
+      } else {
+        // Wait for the download chain to finish (or fail) before loading.
+        // Don't block initApp itself — kick a follow-up task instead.
+        startDownloads.finally(tryLoadCurrentModel);
       }
     } catch (error) {
       console.error("Failed to initialize app:", error);

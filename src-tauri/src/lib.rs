@@ -85,6 +85,8 @@ fn run_full_app() {
             commands::set_model_languages,
             commands::load_whisper_model,
             commands::is_model_loaded,
+            commands::list_required_models,
+            commands::download_model,
             commands::check_permissions,
             commands::request_microphone_permission,
             commands::get_available_models,
