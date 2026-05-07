@@ -80,7 +80,7 @@ jobs:
             | **macOS (Apple Silicon)** | `.dmg` | - |
             | **macOS (Intel)** | `.dmg` | - |
             | **Windows** | `.exe` (NSIS), `.msi` | `.zip` (portable) |
-            | **Linux** | `.deb`, `.rpm` | `.tar.gz` (portable) |
+            | **Linux** | `.deb`, `.rpm` | `.AppImage`, `.tar.gz` (portable) |
 
             ## Installation Notes
 
@@ -96,7 +96,8 @@ jobs:
             ### Linux
             - **Debian/Ubuntu**: `sudo dpkg -i s2tui_*.deb`
             - **Fedora/RHEL/CentOS**: `sudo rpm -ivh s2tui-*.rpm`
-            - **Portable**: extract the `.tar.gz` and run.
+            - **Arch / any glibc ≥ 2.35 distro (AppImage)**: `chmod +x S2Tui_*.AppImage && ./S2Tui_*.AppImage`. Single-file binary, no install. Requires `fuse2` (`sudo pacman -S fuse2` on Arch).
+            - **Portable**: extract the `.tar.gz` and run (you'll still need the runtime deps installed manually).
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -122,7 +123,13 @@ jobs:
           - name: Linux
             os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            bundles: deb
+            # AppImage is added alongside .deb so distros that aren't
+            # Debian/Ubuntu (Arch, Fedora, etc.) get a single-file binary
+            # without distro-specific packaging. RPM is intentionally
+            # NOT in this list — it's hand-rolled in a later step from
+            # the same release binary, and adding `rpm` here would
+            # produce a duplicate (with different naming).
+            bundles: deb,appimage
 
     runs-on: ${{ matrix.platform.os }}
 
@@ -171,6 +178,7 @@ jobs:
             libjavascriptcoregtk-4.1-dev \
             libxcb-shm0 \
             libvulkan-dev \
+            libfuse2 \
             rpm \
             wget
           # Vulkan SDK for the Linux build (matches v0.1.5's build-linux job).

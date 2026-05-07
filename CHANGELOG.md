@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- AppImage bundle for the Linux release
+  (`S2Tui_<version>_amd64.AppImage`). Single file that runs on Arch,
+  Fedora, Debian, Ubuntu and any distro with glibc ≥ 2.35 — no manual
+  dependency install required, just `chmod +x` and run. Closes the gap
+  for users on distros not covered by the existing `.deb`/`.rpm`
+  artifacts.
+
 ## [0.1.7] - 2026-05-07
 
 ### Added
