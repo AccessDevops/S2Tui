@@ -7,14 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-05-07
+
 ### Added
-- Multi-platform support (macOS, Windows, Linux)
-- GitHub Actions CI/CD pipeline
-- Windows installer (NSIS) and portable ZIP
-- Linux AppImage and .deb packages
+- Supported language registry expanded from 14 to 64. Settings now
+  exposes a tier-aware (high / medium) chip cycle with a searchable
+  picker for adding favourites; `auto` is pinned and cannot be
+  removed.
+- `language-first` cycle mode for the language toggle shortcut: when
+  the next favourite isn't supported by the active model, the most
+  capable compatible model is loaded automatically. The legacy
+  `model-first` mode (cycle stays within the active model's
+  whitelist) remains the default.
+- Whisper models are no longer bundled in the installer. They are
+  downloaded from the dedicated `models-v1` GitHub Release on first
+  launch (~728 MB total, one-time). Each app build is now ~50–80 MB
+  instead of ~800 MB.
+- Welcome window shows a per-model progress bar while the first-launch
+  download is running, and gates its "Get started" button until both
+  models are present.
+- Mic button surfaces download progress when the welcome window is
+  closed: blue ring around the button reflecting cumulative percent,
+  dimmed flag/icon, click intercept, and a permanent badge above the
+  mic showing `Downloading… N%`.
+- Settings → Whisper Models tab shows live per-row state during a
+  download: `Downloading… X%` with inline progress bar and byte
+  counter, `Pending` for queued entries, and a `Retry` action when a
+  download fails (the only recovery surface once welcome has been
+  closed).
+- Cycle shortcuts (language and model) early-return with the same
+  download badge text instead of attempting to load a `.partial`
+  file.
+
+### Fixed
+- Flag SVGs now render in packaged builds. The default Vite asset
+  inlining converted small SVGs to `data:` URLs, which CSP rejected
+  on first paint; inlining is disabled and Tauri's CSP allows the
+  asset protocol.
+- Settings footer pulls the app version from Tauri at runtime
+  (`getVersion()`), so the displayed version always matches the
+  built binary instead of the hardcoded literal that was visibly
+  stale after every release.
 
 ### Changed
-- Text insertion now works on Windows and Linux via clipboard + Ctrl+V simulation
+- Welcome window: download progress card now sits above the GPU
+  status section, matching what the user actually waits on at first
+  launch.
+- Release workflow no longer copies Whisper models into the Windows
+  portable ZIP, the Linux portable tarball, or the RPM payload —
+  those archives now ship without bundled models, the app downloads
+  them on first launch like every other artifact.
 
 ## [0.1.6] - 2026-05-06
 

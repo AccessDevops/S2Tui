@@ -37,15 +37,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download Whisper models
-        shell: bash
-        run: |
-          mkdir -p src-tauri/models
-          # Simplified naming without quantization suffix for easier maintenance
-          curl -L -o src-tauri/models/ggml-small.bin \
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin"
-          curl -L -o src-tauri/models/ggml-large-v3-turbo.bin \
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
+      # Whisper models are no longer needed at build time. They're not
+      # embedded (no `include_bytes!`, no Tauri `resources` entry) — the
+      # app downloads them from the `models-v1` GitHub Release on first
+      # launch, so `cargo check`, `cargo clippy` and `npm run build` all
+      # run fine without `.bin` files present.
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -143,14 +139,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download Whisper models
-        run: |
-          mkdir -p src-tauri/models
-          # Simplified naming without quantization suffix for easier maintenance
-          curl -L -o src-tauri/models/ggml-small.bin \
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin"
-          curl -L -o src-tauri/models/ggml-large-v3-turbo.bin \
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
+      # Whisper models are not needed for lint either — same rationale as
+      # the `check` job above. Saves ~728 MB of curl traffic per CI run.
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

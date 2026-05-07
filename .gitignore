@@ -11,7 +11,10 @@ src-tauri/target/
 src-tauri/WixTools/
 src-tauri/gen/
 
-# Whisper models (downloaded from Hugging Face during CI/build)
+# Whisper models. Local-dev only — `tauri dev` reads from this folder so
+# maintainers don't have to wait on the auto-download path. CI does not
+# fetch them anymore (the app downloads from the `models-v1` GitHub
+# Release on first launch); see CLAUDE.md.
 src-tauri/models/*.bin
 
 # Logs

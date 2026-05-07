@@ -225,12 +225,15 @@ jobs:
         if: matrix.platform.name == 'Windows'
         shell: pwsh
         run: |
+          # Models are no longer bundled — the app downloads them from the
+          # `models-v1` GitHub Release on first launch. The portable ZIP
+          # ships only the executable; whisper-cpp .bin files used to be
+          # copied here from src-tauri/models/ which is gitignored and
+          # absent in CI checkouts.
           $version = "${{ needs.create-release.outputs.version }}"
           $distDir = "S2Tui-portable"
           New-Item -ItemType Directory -Force -Path "$distDir" | Out-Null
-          New-Item -ItemType Directory -Force -Path "$distDir/models" | Out-Null
           Copy-Item "src-tauri/target/${{ matrix.platform.target }}/release/S2Tui.exe" "$distDir/"
-          Copy-Item "src-tauri/models/*.bin" "$distDir/models/"
           Compress-Archive -Path "$distDir/*" -DestinationPath "S2Tui_${version}_windows_portable.zip"
 
       - name: Upload Windows portable ZIP
@@ -245,11 +248,15 @@ jobs:
       - name: Create Linux portable tarball
         if: matrix.platform.name == 'Linux'
         run: |
+          # Models are no longer bundled — the app downloads them on first
+          # launch from the `models-v1` GitHub Release. The previous
+          # `cp src-tauri/models/*.bin` step is intentionally removed: that
+          # directory is gitignored and would expand to nothing in CI,
+          # crashing the job.
           version="${{ needs.create-release.outputs.version }}"
           distDir="S2Tui-portable"
-          mkdir -p "$distDir/models"
+          mkdir -p "$distDir"
           cp src-tauri/target/${{ matrix.platform.target }}/release/S2Tui "$distDir/S2Tui"
-          cp src-tauri/models/*.bin "$distDir/models/"
           chmod +x "$distDir/S2Tui"
           tar -czf "S2Tui_${version}_linux_x64_portable.tar.gz" "$distDir"
 
@@ -270,8 +277,13 @@ jobs:
 
           mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 
+          # Whisper .bin files are no longer bundled — the app fetches them
+          # from the `models-v1` GitHub Release at first launch. The RPM
+          # payload only ships the executable now; the previous
+          # `/usr/share/s2tui/models/*.bin` install paths are intentionally
+          # gone, both because the source files don't exist in CI and
+          # because shipping a 728 MB RPM was wasteful.
           cp src-tauri/target/${{ matrix.platform.target }}/release/S2Tui ~/rpmbuild/SOURCES/S2Tui
-          cp src-tauri/models/*.bin ~/rpmbuild/SOURCES/
 
           cat > ~/rpmbuild/SPECS/s2tui.spec <<EOF
           Name:           s2tui
@@ -289,13 +301,10 @@ jobs:
 
           %install
           mkdir -p %{buildroot}/usr/bin
-          mkdir -p %{buildroot}/usr/share/s2tui/models
           install -m 755 %{_sourcedir}/S2Tui %{buildroot}/usr/bin/S2Tui
-          install -m 644 %{_sourcedir}/*.bin %{buildroot}/usr/share/s2tui/models/
 
           %files
           /usr/bin/S2Tui
-          /usr/share/s2tui/models/*.bin
           EOF
 
           rpmbuild -bb ~/rpmbuild/SPECS/s2tui.spec

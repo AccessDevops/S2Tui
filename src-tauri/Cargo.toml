@@ -1,6 +1,6 @@
 [package]
 name = "s2tui"
-version = "0.1.6"
+version = "0.1.7"
 description = "Speech-to-Text UI - Local transcription with Whisper"
 authors = ["S2Tui"]
 edition = "2021"
