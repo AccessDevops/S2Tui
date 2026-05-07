@@ -266,11 +266,7 @@ function handleDragStart(event: MouseEvent) {
           <!-- Support Section (moved from bottom) -->
           <div class="text-center mb-5">
             <p class="text-white/70 text-sm mb-2">
-              S2Tui is free forever, even for commercial use. I'm
-              <button type="button" @click="openUrl('https://cbarange.com')" class="text-blue-400 hover:text-blue-300 font-semibold transition-colors">cbarange</button>,
-              the sole developer, currently funding the Apple Developer license ($99/year) myself.
-              If you'd like to support the project, consider
-              <button type="button" @click="openUrl('https://github.com/sponsors/AccessDevops')" class="text-blue-400 hover:text-blue-300 font-semibold transition-colors">becoming a sponsor</button>.
+              S2Tui is free forever, even for commercial use.
             </p>
             <p class="text-white/60 text-xs">
               Feel free to contact me:
@@ -290,6 +286,55 @@ function handleDragStart(event: MouseEvent) {
                   Copied!
                 </span>
               </span>
+            </p>
+          </div>
+
+          <!-- First-launch model download (only renders when at least
+               one Whisper model is missing on disk). Models are no longer
+               bundled with the app — they're fetched from the
+               `models-v1` GitHub Release on demand. The Get Started
+               button stays disabled while the downloads are running. -->
+          <div
+            v-if="downloadItems.length > 0"
+            class="mb-3 p-3 rounded-xl bg-white/5 border border-white/10 space-y-2"
+          >
+            <div>
+              <h3 class="text-white text-sm font-semibold">Setting up speech recognition</h3>
+              <p class="text-white/50 text-xs">First-time download — needed once. Total ~728 MB.</p>
+            </div>
+            <div
+              v-for="item in downloadItems"
+              :key="item.id"
+              class="space-y-1"
+            >
+              <div class="flex items-center justify-between text-xs">
+                <span class="text-white">{{ item.displayName }}</span>
+                <span class="text-white/40">
+                  <span v-if="item.status === 'pending'">Pending</span>
+                  <span v-else-if="item.status === 'downloading'">
+                    {{ formatBytes(item.bytesReceived) }} / {{ formatBytes(item.sizeBytes) }}
+                    ({{ item.percent }}%)
+                  </span>
+                  <span v-else-if="item.status === 'done'" class="text-green-400">Done</span>
+                  <span v-else-if="item.status === 'error'" class="text-red-400">Failed</span>
+                </span>
+              </div>
+              <div class="h-1.5 rounded-full bg-white/10 overflow-hidden">
+                <div
+                  class="h-full transition-all"
+                  :class="item.status === 'error' ? 'bg-red-500' : 'bg-blue-500'"
+                  :style="{ width: `${item.percent}%` }"
+                ></div>
+              </div>
+              <p v-if="item.errorMessage" class="text-red-400 text-xs">
+                {{ item.errorMessage }}
+              </p>
+            </div>
+            <p
+              v-if="anyDownloadFailed"
+              class="text-amber-300/80 text-xs pt-1"
+            >
+              A download failed. Restart the app to retry.
             </p>
           </div>
 
@@ -372,55 +417,6 @@ function handleDragStart(event: MouseEvent) {
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
               </svg>
             </button>
-          </div>
-
-          <!-- First-launch model download (only renders when at least
-               one Whisper model is missing on disk). Models are no longer
-               bundled with the app — they're fetched from the
-               `models-v1` GitHub Release on demand. The Get Started
-               button stays disabled while the downloads are running. -->
-          <div
-            v-if="downloadItems.length > 0"
-            class="mb-3 p-3 rounded-xl bg-white/5 border border-white/10 space-y-2"
-          >
-            <div>
-              <h3 class="text-white text-sm font-semibold">Setting up speech recognition</h3>
-              <p class="text-white/50 text-xs">First-time download — needed once. Total ~728 MB.</p>
-            </div>
-            <div
-              v-for="item in downloadItems"
-              :key="item.id"
-              class="space-y-1"
-            >
-              <div class="flex items-center justify-between text-xs">
-                <span class="text-white">{{ item.displayName }}</span>
-                <span class="text-white/40">
-                  <span v-if="item.status === 'pending'">Pending</span>
-                  <span v-else-if="item.status === 'downloading'">
-                    {{ formatBytes(item.bytesReceived) }} / {{ formatBytes(item.sizeBytes) }}
-                    ({{ item.percent }}%)
-                  </span>
-                  <span v-else-if="item.status === 'done'" class="text-green-400">Done</span>
-                  <span v-else-if="item.status === 'error'" class="text-red-400">Failed</span>
-                </span>
-              </div>
-              <div class="h-1.5 rounded-full bg-white/10 overflow-hidden">
-                <div
-                  class="h-full transition-all"
-                  :class="item.status === 'error' ? 'bg-red-500' : 'bg-blue-500'"
-                  :style="{ width: `${item.percent}%` }"
-                ></div>
-              </div>
-              <p v-if="item.errorMessage" class="text-red-400 text-xs">
-                {{ item.errorMessage }}
-              </p>
-            </div>
-            <p
-              v-if="anyDownloadFailed"
-              class="text-amber-300/80 text-xs pt-1"
-            >
-              A download failed. Restart the app to retry.
-            </p>
           </div>
 
           <!-- Actions -->
