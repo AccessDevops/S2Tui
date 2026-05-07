@@ -83,6 +83,7 @@ fn run_full_app() {
             commands::set_model_toggle_shortcut,
             commands::set_favorite_languages,
             commands::set_model_languages,
+            commands::set_language_cycle_mode,
             commands::load_whisper_model,
             commands::is_model_loaded,
             commands::list_required_models,

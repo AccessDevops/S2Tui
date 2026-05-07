@@ -24,6 +24,7 @@ const defaultSettings: PersistedSettings = {
   modelToggleShortcut: "",
   favoriteLanguages: codesByTier("high"),
   modelLanguages: {},
+  languageCycleMode: "model-first",
   history: [],
   vulkanWarningDismissed: false,
   welcomeDismissed: false,

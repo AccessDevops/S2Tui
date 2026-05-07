@@ -44,12 +44,26 @@ export interface GpuStatus {
 export interface ModelInfo {
   id: ModelId;
   name: string;
+  /** Human-friendly size shown in the picker, e.g. "190 MB". */
   size: string;
+  /** Same value as the Rust `MODEL_REGISTRY.size_bytes` for this id. Used to
+   *  rank models by capacity (proxy: the larger the .bin, the more capable
+   *  the Whisper checkpoint) when language-first cycling needs to auto-pick
+   *  a compatible model. Will become dynamic once custom models ship. */
+  sizeBytes: number;
   downloaded: boolean;
   downloading: boolean;
   progress: number;
   bundled: boolean;
 }
+
+/** Two-state behaviour switch for the language cycle shortcut.
+ *  - `model-first`: cycle stays within favourites the active model supports
+ *    (the v0.1.6 default). Use the model shortcut to swap model.
+ *  - `language-first`: cycle through every favourite, auto-switching to the
+ *    most capable compatible model when the current one can't transcribe
+ *    the next language. */
+export type LanguageCycleMode = "model-first" | "language-first";
 
 export interface Settings {
   language: Language;
@@ -64,6 +78,8 @@ export interface Settings {
   favoriteLanguages: Language[];
   /** Per-model language whitelist. Missing key = supports every favorite. */
   modelLanguages: Record<string, Language[]>;
+  /** Behaviour of the language cycle shortcut. See `LanguageCycleMode`. */
+  languageCycleMode: LanguageCycleMode;
 }
 
 // Re-exports kept for backward compat with components that already import
@@ -110,6 +126,7 @@ export const useAppStore = defineStore("app", () => {
     modelToggleShortcut: "",
     favoriteLanguages: [...ALL_LANGUAGES],
     modelLanguages: {},
+    languageCycleMode: "model-first",
   });
 
   // Toast shown above the mic button after a language/model toggle.
@@ -131,8 +148,8 @@ export const useAppStore = defineStore("app", () => {
 
   // Bundled models only
   const models = ref<ModelInfo[]>([
-    { id: "small", name: "Small (Fast)", size: "190 MB", downloaded: true, downloading: false, progress: 100, bundled: false },
-    { id: "large-v3-turbo", name: "Large V3 Turbo (Best)", size: "547 MB", downloaded: true, downloading: false, progress: 100, bundled: false },
+    { id: "small", name: "Small (Fast)", size: "190 MB", sizeBytes: 190085487, downloaded: true, downloading: false, progress: 100, bundled: false },
+    { id: "large-v3-turbo", name: "Large V3 Turbo (Best)", size: "547 MB", sizeBytes: 601463531, downloaded: true, downloading: false, progress: 100, bundled: false },
   ]);
 
   const history = ref<HistoryEntry[]>([]);

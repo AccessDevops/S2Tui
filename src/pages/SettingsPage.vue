@@ -23,6 +23,7 @@ const {
   setModelToggleShortcut,
   setFavoriteLanguages,
   setModelLanguages,
+  setLanguageCycleMode,
   loadWhisperModel,
   checkSystemHealth,
   checkPermissions,
@@ -261,6 +262,14 @@ async function handleModelToggleShortcutChange(newShortcut: string) {
     modelToggleShortcutError.value =
       error instanceof Error ? error.message : "Unable to register this shortcut.";
     store.updateSettings({ modelToggleShortcut: settings.value.modelToggleShortcut });
+  }
+}
+
+async function handleCycleModeChange(mode: "model-first" | "language-first") {
+  try {
+    await setLanguageCycleMode(mode);
+  } catch (error) {
+    console.error("Failed to set language cycle mode:", error);
   }
 }
 
@@ -567,6 +576,53 @@ function getBackendColor(backend: string | undefined): string {
               </svg>
               {{ langToggleShortcutError }}
             </p>
+          </div>
+
+          <!-- Language cycle behaviour: model-first vs language-first.
+               Sits between the cycle shortcut configuration and the
+               favourites picker because it changes how that picker is
+               consumed by the shortcut. -->
+          <div class="space-y-2">
+            <label class="block text-white font-medium">Language cycle behavior</label>
+            <p class="text-white/50 text-sm">What happens when you press the language cycle shortcut.</p>
+            <div class="space-y-1.5">
+              <label
+                class="flex items-start gap-2 p-2 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <input
+                  type="radio"
+                  name="languageCycleMode"
+                  value="model-first"
+                  :checked="settings.languageCycleMode === 'model-first'"
+                  @change="handleCycleModeChange('model-first')"
+                  class="mt-0.5 w-4 h-4 border-white/30 bg-white/10 text-mic-listening focus:ring-mic-listening focus:ring-offset-0"
+                />
+                <div>
+                  <div class="text-white text-sm">Stay on the current model</div>
+                  <div class="text-white/40 text-xs">
+                    Cycle only through favourites the current model supports. Use the model shortcut to change model.
+                  </div>
+                </div>
+              </label>
+              <label
+                class="flex items-start gap-2 p-2 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <input
+                  type="radio"
+                  name="languageCycleMode"
+                  value="language-first"
+                  :checked="settings.languageCycleMode === 'language-first'"
+                  @change="handleCycleModeChange('language-first')"
+                  class="mt-0.5 w-4 h-4 border-white/30 bg-white/10 text-mic-listening focus:ring-mic-listening focus:ring-offset-0"
+                />
+                <div>
+                  <div class="text-white text-sm">Auto-switch model when needed</div>
+                  <div class="text-white/40 text-xs">
+                    Cycle through every favourite. If the current model doesn't support the next language, switch to the most capable compatible model (might add a few seconds for loading).
+                  </div>
+                </div>
+              </label>
+            </div>
           </div>
 
           <!-- Favorite languages: chips for selection + searchable Add picker.

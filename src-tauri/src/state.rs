@@ -109,6 +109,21 @@ pub struct Settings {
     /// favorite language (friendly default for newly downloaded models).
     #[serde(default)]
     pub model_languages: HashMap<String, Vec<Language>>,
+    /// Behaviour of the language-cycle shortcut. Two literal values:
+    /// `"model-first"` (keep the active model fixed, cycle only through
+    /// favourites it supports — the v0.1.6 behaviour, default) and
+    /// `"language-first"` (cycle through every favourite, auto-switching
+    /// to the most-capable compatible model when needed).
+    ///
+    /// Stored as a `String` rather than an enum so that adding a future
+    /// mode doesn't break old settings.json files. Validation lives in
+    /// the `set_language_cycle_mode` command.
+    #[serde(default = "default_language_cycle_mode")]
+    pub language_cycle_mode: String,
+}
+
+fn default_language_cycle_mode() -> String {
+    "model-first".to_string()
 }
 
 impl Default for Settings {
@@ -121,6 +136,7 @@ impl Default for Settings {
             model_toggle_shortcut: String::new(),
             favorite_languages: Vec::new(),
             model_languages: HashMap::new(),
+            language_cycle_mode: default_language_cycle_mode(),
         }
     }
 }
@@ -266,5 +282,12 @@ mod tests {
         assert_eq!(Language::from_code("zz"), None);
         assert_eq!(Language::from_code(""), None);
         assert_eq!(Language::from_code("not-a-code"), None);
+    }
+
+    #[test]
+    fn settings_default_preserves_v0_1_6_cycle_behaviour() {
+        // Existing v0.1.6 users upgrading must not see their language-cycle
+        // behaviour change without explicit consent. Default = "model-first".
+        assert_eq!(Settings::default().language_cycle_mode, "model-first");
     }
 }

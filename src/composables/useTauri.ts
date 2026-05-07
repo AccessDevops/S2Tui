@@ -206,6 +206,20 @@ export function useTauri() {
     }
   }
 
+  async function setLanguageCycleMode(
+    mode: "model-first" | "language-first",
+  ): Promise<void> {
+    try {
+      await invoke("set_language_cycle_mode", { mode });
+      store.updateSettings({ languageCycleMode: mode });
+      await saveSettings({ languageCycleMode: mode });
+      await broadcastSettingsUpdate();
+    } catch (error) {
+      console.error("Failed to set language cycle mode:", error);
+      throw error;
+    }
+  }
+
   // Commands - Model Management
   async function loadWhisperModel(model: ModelId) {
     try {
@@ -357,6 +371,9 @@ export function useTauri() {
         }
         if (persisted.modelToggleShortcut) {
           await invoke("set_model_toggle_shortcut", { shortcut: persisted.modelToggleShortcut });
+        }
+        if (persisted.languageCycleMode) {
+          await invoke("set_language_cycle_mode", { mode: persisted.languageCycleMode });
         }
       } catch (err) {
         console.error("Failed to sync toggle config to backend:", err);
@@ -613,6 +630,7 @@ export function useTauri() {
           modelToggleShortcut: persisted.modelToggleShortcut ?? "",
           favoriteLanguages: persisted.favoriteLanguages ?? store.settings.favoriteLanguages,
           modelLanguages: persisted.modelLanguages ?? {},
+          languageCycleMode: persisted.languageCycleMode ?? "model-first",
         });
       } catch (err) {
         console.error("Failed to reload settings on settings:updated event:", err);
@@ -624,10 +642,15 @@ export function useTauri() {
     // 90×100 px overlay window stays readable on one or two lines.
     const shortModelName = (name: string): string => name.replace(/\s*\([^)]*\)\s*$/, "");
 
-    // Language cycle shortcut: cycles through favoriteLanguages restricted to
-    // those the CURRENT model supports. The model is sticky — only the model
-    // shortcut changes it. If the current model has fewer than 2 supported
-    // favorites, the cycle is a no-op with an explanatory toast.
+    // Language cycle shortcut. Two behaviours selectable from Settings via
+    // `languageCycleMode`:
+    //   - "model-first" (v0.1.6 default): cycle is restricted to favourites
+    //     the active model supports. Model is sticky — use the model shortcut
+    //     to change it.
+    //   - "language-first" (rusak47's keyboard-layout request): cycle walks
+    //     through every favourite; if the current model doesn't support the
+    //     next language, auto-switch to the most-capable compatible model
+    //     (largest sizeBytes) before changing the language.
     unlistenFns.push(await listen("shortcut:toggle-language", async () => {
       const favorites = store.settings.favoriteLanguages;
       if (favorites.length < 2) {
@@ -636,8 +659,67 @@ export function useTauri() {
       }
 
       const modelLangs = store.settings.modelLanguages;
+      const mode = store.settings.languageCycleMode;
+
+      if (mode === "language-first") {
+        // ============ MODE: LANGUAGE-FIRST ============================
+        const downloaded = store.models.filter((m) => m.downloaded);
+        if (downloaded.length === 0) {
+          store.showToggleNotification("No model");
+          return;
+        }
+
+        // Pick the most-capable compatible model for a given language. Tie
+        // is broken by sizeBytes desc — proxy of "more capable". Returns
+        // null if no downloaded model accepts the language.
+        const bestModelFor = (lang: Language) => {
+          const compatible = downloaded.filter((m) => {
+            const list = modelLangs[m.id];
+            return list === undefined || list.includes(lang);
+          });
+          if (compatible.length === 0) return null;
+          return [...compatible].sort((a, b) => b.sizeBytes - a.sizeBytes)[0];
+        };
+
+        const startIndex = Math.max(0, favorites.indexOf(store.settings.language));
+        for (let step = 1; step <= favorites.length; step++) {
+          const candidate = favorites[(startIndex + step) % favorites.length];
+          const target = bestModelFor(candidate);
+          if (!target) continue; // no model supports this language → skip
+
+          const needsModelSwitch = target.id !== store.settings.model;
+          // Mid-recording, switching model would kill the in-flight
+          // transcription. Pure language change is safe (whisper-rs reads
+          // params at the start of each `state.full()`).
+          if (needsModelSwitch && store.status !== "idle") {
+            store.showToggleNotification("Stop recording before switching model");
+            return;
+          }
+
+          try {
+            const label = shortModelName(target.name);
+            if (needsModelSwitch) {
+              store.showToggleNotification(`Loading ${label}…`);
+              await loadWhisperModel(target.id);
+            }
+            await setLanguage(candidate);
+            const langDisplay = LANGUAGE_DISPLAY_NAMES[candidate] || candidate;
+            store.showToggleNotification(
+              needsModelSwitch ? `${label} · ${langDisplay}` : langDisplay,
+            );
+          } catch (error) {
+            console.error("Failed to toggle language:", error);
+            store.showToggleNotification("Toggle failed");
+          }
+          return;
+        }
+
+        store.showToggleNotification("No model fits favorites");
+        return;
+      }
+
+      // ============ MODE: MODEL-FIRST (default, v0.1.6 behaviour) =====
       const currentModel = store.settings.model;
-      // Missing entry = "no restriction yet" → model accepts every favorite.
       const allowedForModel = (lang: Language): boolean => {
         const list = modelLangs[currentModel];
         if (list === undefined) return true;
@@ -650,8 +732,6 @@ export function useTauri() {
         return;
       }
       if (eligible.length === 1) {
-        // If we're already on that single eligible language, nothing to do.
-        // Otherwise force-switch onto it so the user lands on a usable state.
         const only = eligible[0];
         if (store.settings.language === only) {
           store.showToggleNotification("Only 1 favorite for this model");
@@ -667,9 +747,6 @@ export function useTauri() {
         return;
       }
 
-      // Cycle within the eligible subset. If the current language is outside
-      // the eligible list, jump to the first eligible entry instead of cycling
-      // from a non-existent index.
       const currentIndex = eligible.indexOf(store.settings.language);
       const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % eligible.length : 0;
       const nextLang = eligible[nextIndex];
@@ -781,6 +858,7 @@ export function useTauri() {
     setModelToggleShortcut,
     setFavoriteLanguages,
     setModelLanguages,
+    setLanguageCycleMode,
     // Models
     loadWhisperModel,
     loadWhisperModelWithOptions,

@@ -549,6 +549,27 @@ pub fn set_model_languages(
     Ok(())
 }
 
+/// Update the language-cycle behaviour. Two literal values are accepted:
+/// `"model-first"` (the v0.1.6 default — model is sticky, cycle filtered
+/// to favourites the current model supports) and `"language-first"`
+/// (cycle through every favourite, auto-switching to the most-capable
+/// compatible model when needed). Any other input is rejected so a
+/// hand-edited settings.json with garbage doesn't reach the listener.
+#[tauri::command]
+pub fn set_language_cycle_mode(mode: String, state: State<'_, AppState>) -> Result<(), String> {
+    if mode != "model-first" && mode != "language-first" {
+        return Err(format!(
+            "Invalid language cycle mode: {} (expected 'model-first' or 'language-first')",
+            mode
+        ));
+    }
+    tracing::info!("Language cycle mode set to: {}", mode);
+    state.update_settings(|s| {
+        s.language_cycle_mode = mode;
+    });
+    Ok(())
+}
+
 /// Get list of available models on disk
 /// Dynamically scans for ggml-*.bin files and extracts model names
 #[tauri::command]
