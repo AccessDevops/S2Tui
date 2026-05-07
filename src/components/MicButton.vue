@@ -55,30 +55,13 @@ const hasDownloadError = computed(() =>
   store.modelDownload.items.some((i) => i.status === "error"),
 );
 
-function formatBytes(n: number): string {
-  if (n <= 0) return "0 MB";
-  const mb = n / (1024 * 1024);
-  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
-  return `${Math.round(mb)} MB`;
-}
-
-const downloadTooltip = computed(() => {
-  if (!isModelDownloading.value) return "";
-  if (hasDownloadError.value) {
-    const failed = store.modelDownload.items.find((i) => i.status === "error");
-    return `Download failed${failed?.errorMessage ? `: ${failed.errorMessage}` : ""} — open Settings → Models to retry`;
-  }
-  const items = store.modelDownload.items;
-  const done = items.reduce((s, i) => s + i.bytesReceived, 0);
-  const total = items.reduce((s, i) => s + i.sizeBytes, 0);
-  return `Downloading speech models — ${formatBytes(done)} / ${formatBytes(total)} (${downloadPercent.value}%)`;
-});
-
-// SVG ring geometry — kept here so the template stays declarative. The
-// circle sits just outside the 56 px button (radius 30, drawn on a 64 px
-// box). Stroke uses dasharray = circumference; offset shrinks as percent
-// climbs, so the filled arc grows clockwise from 12 o'clock.
-const RING_RADIUS = 30;
+// SVG ring geometry. Drawn inside a 56×56 viewBox so it lines up exactly
+// with the button's 56×56 footprint (no extra width — the v1 build had a
+// 64-px ring that overflowed because right:0 + left:0 + width:64 in a
+// 56-wide parent makes the browser drop the right constraint and anchor
+// the SVG at left:0). r=26 + stroke=3 keeps the outer stroke edge at
+// 27.5 px, fully inside the parent.
+const RING_RADIUS = 26;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 const ringDashOffset = computed(
   () => RING_CIRCUMFERENCE * (1 - downloadPercent.value / 100),
@@ -92,16 +75,11 @@ async function handleClick() {
   }
 
   // Soft-lock the mic while models are still downloading — clicking now
-  // would either start a recording with no model loaded or, worse, try to
-  // load a `.partial` file. Surface what's going on instead.
+  // would either start a recording with no model loaded or, worse, try
+  // to load a `.partial` file. The Overlay renders a permanent download
+  // badge above the button, so no toast is fired here (it would just
+  // duplicate or stack on top of the badge).
   if (isModelDownloading.value) {
-    if (hasDownloadError.value) {
-      store.showToggleNotification("Download failed — open Settings");
-    } else {
-      store.showToggleNotification(
-        `Downloading models — ${downloadPercent.value}%`,
-      );
-    }
     return;
   }
 
@@ -164,21 +142,22 @@ function handleRightClick(e: MouseEvent) {
     <!-- VU Meter Ring -->
     <VuMeter :level="vuLevel" :active="status === 'listening'" />
 
-    <!-- Download progress ring. Sits in the same .relative parent as the
-         button so it overlays it without affecting layout. Hidden once all
-         downloads complete. The grey track + blue arc give a clear "this is
-         not the listening VU meter" cue. -->
+    <!-- Download progress ring. Mirrors the VuMeter sizing approach so the
+         ring sits exactly inside the button's 56×56 footprint — no fixed
+         pixel width/height (those over-constrain the absolute box and
+         offset the ring), just `w-full h-full` + a viewBox matching the
+         button. r=26 + stroke=3 keeps the visual within the existing
+         button outline. The grey track + blue arc distinguish this from
+         the green VU meter. -->
     <svg
       v-if="isModelDownloading"
-      class="absolute inset-0 m-auto pointer-events-none z-20"
+      class="absolute inset-0 w-full h-full pointer-events-none z-20"
       :class="hasDownloadError ? 'text-red-400' : 'text-blue-400'"
-      width="64"
-      height="64"
-      viewBox="0 0 64 64"
+      viewBox="0 0 56 56"
     >
       <circle
-        cx="32"
-        cy="32"
+        cx="28"
+        cy="28"
         :r="RING_RADIUS"
         fill="none"
         stroke="currentColor"
@@ -186,8 +165,8 @@ function handleRightClick(e: MouseEvent) {
         stroke-width="3"
       />
       <circle
-        cx="32"
-        cy="32"
+        cx="28"
+        cy="28"
         :r="RING_RADIUS"
         fill="none"
         stroke="currentColor"
@@ -195,7 +174,7 @@ function handleRightClick(e: MouseEvent) {
         stroke-linecap="round"
         :stroke-dasharray="RING_CIRCUMFERENCE"
         :stroke-dashoffset="ringDashOffset"
-        transform="rotate(-90 32 32)"
+        transform="rotate(-90 28 28)"
         style="transition: stroke-dashoffset 200ms linear"
       />
     </svg>
@@ -205,7 +184,6 @@ function handleRightClick(e: MouseEvent) {
       @click="handleClick"
       @mousedown="handleMouseDown"
       @contextmenu="handleRightClick"
-      :title="downloadTooltip || undefined"
       :class="[
         'relative z-10 w-14 h-14 flex items-center justify-center rounded-full overflow-hidden',
         'transition-all duration-200 ease-out',

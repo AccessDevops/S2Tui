@@ -10,6 +10,7 @@ import {
 import { displayNameFor, tierFor } from "../utils/languages";
 import { flagUrlFor } from "../utils/flags";
 import { useTauri } from "../composables/useTauri";
+import { useModelDownloadTracker } from "../composables/useModelDownloadTracker";
 import { loadSettings, saveSettings, loadHistory, clearHistory as clearHistoryStore } from "../composables/useStore";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -116,6 +117,12 @@ onMounted(async () => {
   // Settings window has its own Pinia context, so the persisted toggle config
   // (favorite languages, per-model whitelists, shortcuts) must be loaded here.
   await syncFromPersistence();
+
+  // Same per-window Pinia constraint applies to the model-download slice —
+  // without this, the Models tab rows would keep showing `Use`/`Active`
+  // during a download because no listener ever populated the slice in
+  // this webview's context.
+  await useModelDownloadTracker().attach();
 
   // Load history from persistence
   const savedHistory = await loadHistory();

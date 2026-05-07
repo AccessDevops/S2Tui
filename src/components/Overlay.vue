@@ -8,6 +8,19 @@ import { openSettings } from "../composables/useTauri";
 const store = useAppStore();
 const showCopyNotification = computed(() => store.showCopyNotification);
 
+// Permanent download badge — visible whenever any required model is
+// missing or in flight. Lives at the same `-top-2` slot as the
+// transient toggleNotification toast; the toast is suppressed during
+// downloads so the two don't stack.
+const isModelDownloading = computed(() => store.modelDownload.active);
+const hasDownloadError = computed(() =>
+  store.modelDownload.items.some((i) => i.status === "error"),
+);
+const downloadLabel = computed(() => {
+  if (hasDownloadError.value) return "Download failed";
+  return `Downloading… ${store.modelDownloadCumulativePercent}%`;
+});
+
 const isDragging = ref(false);
 
 function handleMouseDown(event: MouseEvent) {
@@ -86,9 +99,29 @@ function handleMouseDown(event: MouseEvent) {
         </svg>
       </button>
 
+      <!-- Permanent download status badge — always visible while at least
+           one required model is missing or in flight. Same -top-2 slot as
+           the transient toggle toast below, but takes precedence so the
+           two never stack. -->
+      <div
+        v-if="isModelDownloading"
+        class="absolute -top-2 left-1/2 -translate-x-1/2 z-30"
+      >
+        <div
+          :class="[
+            'px-1.5 py-1 rounded-md text-white text-[10px] font-medium leading-tight text-center shadow-lg backdrop-blur-sm max-w-[84px] break-words',
+            hasDownloadError ? 'bg-red-500/95' : 'bg-blue-500/95',
+          ]"
+        >
+          {{ downloadLabel }}
+        </div>
+      </div>
+
       <!-- Toggle Notification (rendered above the mic button so it doesn't obscure it).
            The main overlay window is only 90x100px, so the toast must wrap onto
-           multiple lines for long messages instead of getting clipped. -->
+           multiple lines for long messages instead of getting clipped.
+           Suppressed while a download is in progress — the permanent badge
+           above already occupies this slot. -->
       <Transition
         enter-active-class="transition-all duration-300 ease-out"
         enter-from-class="opacity-0 -translate-y-2"
@@ -98,7 +131,7 @@ function handleMouseDown(event: MouseEvent) {
         leave-to-class="opacity-0 -translate-y-2"
       >
         <div
-          v-if="store.toggleNotification.visible"
+          v-if="store.toggleNotification.visible && !isModelDownloading"
           class="absolute -top-2 left-1/2 -translate-x-1/2 z-30"
         >
           <div class="px-1.5 py-1 rounded-md bg-blue-500/95 text-white text-[10px] font-medium leading-tight text-center shadow-lg backdrop-blur-sm max-w-[84px] break-words">
