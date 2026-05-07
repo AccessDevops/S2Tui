@@ -13,6 +13,7 @@ import { useTauri } from "../composables/useTauri";
 import { loadSettings, saveSettings, loadHistory, clearHistory as clearHistoryStore } from "../composables/useStore";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import ShortcutCapture from "../components/ShortcutCapture.vue";
 
 const store = useAppStore();
@@ -380,6 +381,64 @@ async function handleSelectModel(modelId: ModelId) {
     } finally {
       loadingModelId.value = null;
     }
+  }
+}
+
+// Look up the per-model download item from the appStore slice. Returns
+// `undefined` when nothing is in flight for this model — the caller
+// should treat that as "downloaded if present, otherwise nothing to show".
+function downloadItemFor(modelId: string) {
+  return store.modelDownload.items.find((i) => i.id === modelId);
+}
+
+function downloadStateFor(
+  modelId: string,
+): "downloading" | "pending" | "error" | "idle" {
+  const item = downloadItemFor(modelId);
+  if (!item) return "idle";
+  if (item.status === "done") return "idle";
+  return item.status;
+}
+
+function downloadPercentFor(modelId: string): number {
+  return downloadItemFor(modelId)?.percent ?? 0;
+}
+
+function downloadBytesLabel(modelId: string): string {
+  const item = downloadItemFor(modelId);
+  if (!item) return "";
+  const fmt = (n: number) => {
+    if (n <= 0) return "0 MB";
+    const mb = n / (1024 * 1024);
+    if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
+    return `${Math.round(mb)} MB`;
+  };
+  return `${fmt(item.bytesReceived)} / ${fmt(item.sizeBytes)}`;
+}
+
+function downloadErrorFor(modelId: string): string | undefined {
+  return downloadItemFor(modelId)?.errorMessage;
+}
+
+// Retry a failed download. Pre-flips the slice to `pending` so the row
+// stops showing the red error banner immediately — the backend will emit
+// `progress` events shortly that promote it to `downloading`.
+async function handleRetryDownload(modelId: string) {
+  store.upsertModelDownloadItem(modelId, {
+    status: "pending",
+    bytesReceived: 0,
+    percent: 0,
+    errorMessage: undefined,
+  });
+  try {
+    await invoke("download_model", { model: modelId });
+  } catch (error) {
+    console.error(`Retry download failed for ${modelId}:`, error);
+    store.upsertModelDownloadItem(modelId, {
+      status: "error",
+      errorMessage:
+        error instanceof Error ? error.message : "Download failed",
+    });
   }
 }
 
@@ -899,19 +958,64 @@ function getBackendColor(backend: string | undefined): string {
                 <div class="flex-1">
                   <div class="flex items-center gap-3">
                     <span class="text-white text-lg font-semibold">{{ model.name }}</span>
-                    <span v-if="settings.model === model.id" class="text-xs bg-mic-listening/30 text-mic-listening px-2 py-1 rounded-full">
+                    <span v-if="settings.model === model.id && model.downloaded" class="text-xs bg-mic-listening/30 text-mic-listening px-2 py-1 rounded-full">
                       Active
                     </span>
                   </div>
                   <div class="flex items-center gap-3 mt-2">
                     <span class="text-white/50">{{ model.size }}</span>
+                    <!-- Live byte counter while downloading. Hidden in idle/done
+                         states to keep the row visually quiet. -->
+                    <span
+                      v-if="downloadStateFor(model.id) === 'downloading'"
+                      class="text-blue-400/80 text-sm"
+                    >
+                      {{ downloadBytesLabel(model.id) }} · {{ downloadPercentFor(model.id) }}%
+                    </span>
+                    <span
+                      v-else-if="downloadStateFor(model.id) === 'pending'"
+                      class="text-white/40 text-sm italic"
+                    >
+                      Pending…
+                    </span>
                   </div>
                 </div>
 
                 <div class="flex items-center gap-3">
-                  <!-- Select button -->
+                  <!-- Downloading: disabled placeholder; the inline progress
+                       bar below the row carries the live %. -->
                   <button
-                    v-if="settings.model !== model.id"
+                    v-if="downloadStateFor(model.id) === 'downloading'"
+                    disabled
+                    class="px-4 py-2 rounded-lg bg-blue-500/20 text-blue-300 text-sm font-medium flex items-center gap-2 cursor-not-allowed"
+                  >
+                    <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                    </svg>
+                    Downloading…
+                  </button>
+                  <button
+                    v-else-if="downloadStateFor(model.id) === 'pending'"
+                    disabled
+                    class="px-4 py-2 rounded-lg bg-white/5 text-white/50 text-sm font-medium cursor-not-allowed"
+                  >
+                    Queued
+                  </button>
+                  <button
+                    v-else-if="downloadStateFor(model.id) === 'error'"
+                    @click="handleRetryDownload(model.id)"
+                    class="px-4 py-2 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-300 text-sm font-medium flex items-center gap-2 transition-colors"
+                  >
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                    </svg>
+                    Retry
+                  </button>
+                  <!-- Select button — same behaviour as before, only rendered
+                       when no download activity is happening for this row. -->
+                  <button
+                    v-else-if="settings.model !== model.id && model.downloaded"
                     @click="handleSelectModel(model.id)"
                     :disabled="loadingModelId !== null"
                     class="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white text-sm font-medium transition-colors disabled:opacity-50 flex items-center gap-2"
@@ -928,6 +1032,30 @@ function getBackendColor(backend: string | undefined): string {
                     </template>
                   </button>
                 </div>
+              </div>
+
+              <!-- Inline progress bar while downloading. Sits below the main
+                   row so it doesn't reflow the existing button layout. -->
+              <div
+                v-if="downloadStateFor(model.id) === 'downloading'"
+                class="mt-3 h-1.5 w-full bg-white/10 rounded-full overflow-hidden"
+              >
+                <div
+                  class="h-full bg-blue-400 transition-all duration-200 ease-linear"
+                  :style="{ width: `${downloadPercentFor(model.id)}%` }"
+                ></div>
+              </div>
+
+              <!-- Inline error banner. Replaces the silent failure that
+                   used to leave the user with no recovery surface once
+                   the welcome window had been closed. -->
+              <div
+                v-if="downloadStateFor(model.id) === 'error'"
+                class="mt-3 p-3 rounded-lg bg-red-500/10 border border-red-500/30"
+              >
+                <p class="text-red-300 text-sm">
+                  Download failed{{ downloadErrorFor(model.id) ? `: ${downloadErrorFor(model.id)}` : "" }}
+                </p>
               </div>
             </div>
           </div>

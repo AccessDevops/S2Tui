@@ -427,6 +427,28 @@ export function useTauri() {
         console.error("Failed to query required models:", err);
       }
 
+      // Seed the modelDownload Pinia slice so the mic ring + Settings rows
+      // can render progress *before* the first byte arrives. Items start as
+      // `pending`; the Tauri event listeners (registered in `initListeners`)
+      // promote each to `downloading` / `done` / `error` as the backend
+      // emits events.
+      if (missingModels.length > 0) {
+        for (const m of missingModels) {
+          store.upsertModelDownloadItem(m.id, {
+            displayName: m.displayName,
+            sizeBytes: m.sizeBytes,
+            status: "pending",
+            bytesReceived: 0,
+            percent: 0,
+            errorMessage: undefined,
+          });
+        }
+      } else {
+        // Nothing to download → make sure stale state from a previous
+        // session (HMR / re-init) doesn't keep the UI in download mode.
+        store.clearModelDownload();
+      }
+
       // Show Vulkan warning if:
       // - We checked system health
       // - Vulkan is not available
@@ -581,6 +603,48 @@ export function useTauri() {
       store.updateSettings({ model: event.payload as ModelId });
     }));
 
+    // Model-download lifecycle. The WelcomePage owns its own listeners for
+    // its in-window progress bars; these copies live on the main window so
+    // the mic ring and the Settings → Models tab can react even when the
+    // welcome window is closed (the trigger that motivated this whole UX).
+    unlistenFns.push(await listen<{
+      model: string;
+      bytesReceived: number;
+      totalBytes: number;
+      percent: number;
+    }>("model:download:progress", (e) => {
+      store.upsertModelDownloadItem(e.payload.model, {
+        status: "downloading",
+        bytesReceived: e.payload.bytesReceived,
+        sizeBytes: e.payload.totalBytes,
+        percent: e.payload.percent,
+        errorMessage: undefined,
+      });
+    }));
+    unlistenFns.push(await listen<{ model: string }>(
+      "model:download:complete",
+      (e) => {
+        store.upsertModelDownloadItem(e.payload.model, {
+          status: "done",
+          percent: 100,
+          errorMessage: undefined,
+        });
+        // Mark the model as available so the rest of the UI (model picker,
+        // cycle shortcut) treats it as ready immediately. The `bytesReceived`
+        // bump keeps the cumulative percent honest.
+        store.setModelDownloaded(e.payload.model as ModelId, true);
+      },
+    ));
+    unlistenFns.push(await listen<{ model: string; message: string }>(
+      "model:download:error",
+      (e) => {
+        store.upsertModelDownloadItem(e.payload.model, {
+          status: "error",
+          errorMessage: e.payload.message,
+        });
+      },
+    ));
+
     // Vulkan warning dismissed event (from vulkan warning window)
     unlistenFns.push(await listen<{ permanent: boolean }>("vulkan-warning:dismissed", async (event) => {
       if (event.payload.permanent) {
@@ -652,6 +716,16 @@ export function useTauri() {
     //     next language, auto-switch to the most-capable compatible model
     //     (largest sizeBytes) before changing the language.
     unlistenFns.push(await listen("shortcut:toggle-language", async () => {
+      // While any required model is still downloading we'd hit a `.partial`
+      // file or a model that isn't loaded yet — surface the same toast the
+      // mic-button click does, instead of silently failing.
+      if (store.modelDownload.active) {
+        store.showToggleNotification(
+          `Downloading models — ${store.modelDownloadCumulativePercent}%`,
+        );
+        return;
+      }
+
       const favorites = store.settings.favoriteLanguages;
       if (favorites.length < 2) {
         store.showToggleNotification("Add 2+ favorite languages");
@@ -767,6 +841,13 @@ export function useTauri() {
     // Skips models whose whitelist excludes every favorite — they would
     // otherwise leave the user with no usable language at all.
     unlistenFns.push(await listen("shortcut:toggle-model", async () => {
+      if (store.modelDownload.active) {
+        store.showToggleNotification(
+          `Downloading models — ${store.modelDownloadCumulativePercent}%`,
+        );
+        return;
+      }
+
       if (store.status !== "idle") return;
 
       const downloaded = store.models.filter((m) => m.downloaded);

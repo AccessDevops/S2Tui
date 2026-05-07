@@ -146,6 +146,82 @@ export const useAppStore = defineStore("app", () => {
     microphone: false,
   });
 
+  // ---- Model download progress ------------------------------------------
+  // Single source of truth for the in-flight model downloads. Driven by the
+  // `model:download:progress|complete|error` Tauri events (the listeners
+  // live in `useTauri.ts`). Used by:
+  //   - MicButton.vue: ring + dim + click intercept while at least one model
+  //     is missing or downloading.
+  //   - SettingsPage.vue Models tab: per-row state machine (downloading /
+  //     pending / failed → retry).
+  //   - The cycle shortcut listeners: early-return with toast when downloads
+  //     are in flight, instead of trying to load a `.partial` file.
+  // Transient — never persisted (the desired state is "I want every required
+  // model on disk", which we re-derive from disk on every launch via
+  // `list_required_models`).
+  interface ModelDownloadItem {
+    id: string;
+    displayName: string;
+    sizeBytes: number;
+    bytesReceived: number;
+    percent: number;
+    status: "pending" | "downloading" | "done" | "error";
+    errorMessage?: string;
+  }
+  const modelDownload = ref<{
+    /** True when at least one required model is not yet `done`. */
+    active: boolean;
+    items: ModelDownloadItem[];
+  }>({ active: false, items: [] });
+
+  /** Insert or merge a per-model download item. Used by the Tauri event
+   *  listeners and by Retry handlers in Settings. */
+  function upsertModelDownloadItem(
+    id: string,
+    patch: Partial<ModelDownloadItem> & { displayName?: string; sizeBytes?: number },
+  ) {
+    const existing = modelDownload.value.items.find((i) => i.id === id);
+    if (existing) {
+      Object.assign(existing, patch);
+    } else {
+      modelDownload.value.items.push({
+        id,
+        displayName: patch.displayName ?? id,
+        sizeBytes: patch.sizeBytes ?? 0,
+        bytesReceived: patch.bytesReceived ?? 0,
+        percent: patch.percent ?? 0,
+        status: patch.status ?? "pending",
+        errorMessage: patch.errorMessage,
+      });
+    }
+    recomputeModelDownloadActive();
+  }
+
+  /** Recompute the `active` flag whenever item statuses change. */
+  function recomputeModelDownloadActive() {
+    modelDownload.value.active = modelDownload.value.items.some(
+      (i) => i.status !== "done",
+    );
+  }
+
+  /** Reset the download state — useful when the app boots and no models are
+   *  missing (clears any leftover from a previous session in the same store
+   *  instance, which only happens in tests / hot reload). */
+  function clearModelDownload() {
+    modelDownload.value.items = [];
+    modelDownload.value.active = false;
+  }
+
+  /** Cumulative percent across every tracked item. Used by the mic ring. */
+  const modelDownloadCumulativePercent = computed(() => {
+    const items = modelDownload.value.items;
+    if (items.length === 0) return 0;
+    const total = items.reduce((s, i) => s + i.sizeBytes, 0);
+    if (total === 0) return 0;
+    const done = items.reduce((s, i) => s + i.bytesReceived, 0);
+    return Math.round((Math.min(done, total) / total) * 100);
+  });
+
   // Bundled models only
   const models = ref<ModelInfo[]>([
     { id: "small", name: "Small (Fast)", size: "190 MB", sizeBytes: 190085487, downloaded: true, downloading: false, progress: 100, bundled: false },
@@ -374,6 +450,8 @@ export const useAppStore = defineStore("app", () => {
     lastTranscript,
     showCopyNotification,
     toggleNotification,
+    modelDownload,
+    modelDownloadCumulativePercent,
     errorMessage,
     errorVisible,
     settings,
@@ -408,6 +486,8 @@ export const useAppStore = defineStore("app", () => {
     removeFromHistory,
     triggerCopyNotification,
     showToggleNotification,
+    upsertModelDownloadItem,
+    clearModelDownload,
     // System health actions
     setSystemHealth,
     setGpuStatus,

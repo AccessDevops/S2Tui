@@ -44,10 +44,64 @@ const statusColor = computed(() => {
 
 const isListening = computed(() => status.value === "listening");
 
+// ---- Model download state ---------------------------------------------
+// Driven by the `modelDownload` slice in appStore. While at least one
+// required model is missing we paint a blue progress ring around the
+// button, dim the flag/mic icon, intercept clicks (swap the recording
+// attempt for a toast), and surface a hover tooltip with the byte counts.
+const isModelDownloading = computed(() => store.modelDownload.active);
+const downloadPercent = computed(() => store.modelDownloadCumulativePercent);
+const hasDownloadError = computed(() =>
+  store.modelDownload.items.some((i) => i.status === "error"),
+);
+
+function formatBytes(n: number): string {
+  if (n <= 0) return "0 MB";
+  const mb = n / (1024 * 1024);
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
+  return `${Math.round(mb)} MB`;
+}
+
+const downloadTooltip = computed(() => {
+  if (!isModelDownloading.value) return "";
+  if (hasDownloadError.value) {
+    const failed = store.modelDownload.items.find((i) => i.status === "error");
+    return `Download failed${failed?.errorMessage ? `: ${failed.errorMessage}` : ""} — open Settings → Models to retry`;
+  }
+  const items = store.modelDownload.items;
+  const done = items.reduce((s, i) => s + i.bytesReceived, 0);
+  const total = items.reduce((s, i) => s + i.sizeBytes, 0);
+  return `Downloading speech models — ${formatBytes(done)} / ${formatBytes(total)} (${downloadPercent.value}%)`;
+});
+
+// SVG ring geometry — kept here so the template stays declarative. The
+// circle sits just outside the 56 px button (radius 30, drawn on a 64 px
+// box). Stroke uses dasharray = circumference; offset shrinks as percent
+// climbs, so the filled arc grows clockwise from 12 o'clock.
+const RING_RADIUS = 30;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+const ringDashOffset = computed(
+  () => RING_CIRCUMFERENCE * (1 - downloadPercent.value / 100),
+);
+
 async function handleClick() {
   // Don't trigger click if we just finished dragging
   if (isDragging.value) {
     isDragging.value = false;
+    return;
+  }
+
+  // Soft-lock the mic while models are still downloading — clicking now
+  // would either start a recording with no model loaded or, worse, try to
+  // load a `.partial` file. Surface what's going on instead.
+  if (isModelDownloading.value) {
+    if (hasDownloadError.value) {
+      store.showToggleNotification("Download failed — open Settings");
+    } else {
+      store.showToggleNotification(
+        `Downloading models — ${downloadPercent.value}%`,
+      );
+    }
     return;
   }
 
@@ -110,31 +164,77 @@ function handleRightClick(e: MouseEvent) {
     <!-- VU Meter Ring -->
     <VuMeter :level="vuLevel" :active="status === 'listening'" />
 
+    <!-- Download progress ring. Sits in the same .relative parent as the
+         button so it overlays it without affecting layout. Hidden once all
+         downloads complete. The grey track + blue arc give a clear "this is
+         not the listening VU meter" cue. -->
+    <svg
+      v-if="isModelDownloading"
+      class="absolute inset-0 m-auto pointer-events-none z-20"
+      :class="hasDownloadError ? 'text-red-400' : 'text-blue-400'"
+      width="64"
+      height="64"
+      viewBox="0 0 64 64"
+    >
+      <circle
+        cx="32"
+        cy="32"
+        :r="RING_RADIUS"
+        fill="none"
+        stroke="currentColor"
+        stroke-opacity="0.18"
+        stroke-width="3"
+      />
+      <circle
+        cx="32"
+        cy="32"
+        :r="RING_RADIUS"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="3"
+        stroke-linecap="round"
+        :stroke-dasharray="RING_CIRCUMFERENCE"
+        :stroke-dashoffset="ringDashOffset"
+        transform="rotate(-90 32 32)"
+        style="transition: stroke-dashoffset 200ms linear"
+      />
+    </svg>
+
     <!-- Mic Button -->
     <button
       @click="handleClick"
       @mousedown="handleMouseDown"
       @contextmenu="handleRightClick"
+      :title="downloadTooltip || undefined"
       :class="[
         'relative z-10 w-14 h-14 flex items-center justify-center rounded-full overflow-hidden',
         'transition-all duration-200 ease-out',
-        'hover:scale-110 active:scale-95',
         'shadow-lg hover:shadow-xl',
-        'cursor-pointer',
+        // While downloading, swap the playful hover/active scale for a
+        // not-allowed cursor — the click is intercepted to show a toast
+        // instead of starting a doomed recording.
+        isModelDownloading
+          ? 'cursor-not-allowed'
+          : 'hover:scale-110 active:scale-95 cursor-pointer',
         // The status fill is always the button background. When a flag is
         // active, a smaller inner disc sits on top so the status colour is
         // visible as a thick ring around the flag.
         statusColor,
-        { 'animate-pulse-fast': isListening }
+        { 'animate-pulse-fast': isListening && !isModelDownloading }
       ]"
       :disabled="status === 'processing'"
     >
       <!-- Inner flag disc (only when language has a flag). Inset by 4px on
            every side gives a 4px coloured ring (the button's bg-mic-{state})
-           that stays clearly visible while listening/processing/error. -->
+           that stays clearly visible while listening/processing/error.
+           Dimmed to 50% while downloading: identity preserved, "not ready"
+           signal clear. -->
       <div
         v-if="hasFlag"
-        class="absolute inset-[4px] rounded-full overflow-hidden bg-cover bg-center pointer-events-none"
+        :class="[
+          'absolute inset-[4px] rounded-full overflow-hidden bg-cover bg-center pointer-events-none transition-opacity',
+          isModelDownloading ? 'opacity-50' : '',
+        ]"
         :style="{ backgroundImage: `url(${flagUrl})` }"
       >
         <!-- Subtle dark wash only on bright flags, where the white mic icon
@@ -149,7 +249,11 @@ function handleRightClick(e: MouseEvent) {
       <!-- Microphone Icon -->
       <svg
         xmlns="http://www.w3.org/2000/svg"
-        :class="['relative z-10 w-6 h-6 transition-colors', iconColor]"
+        :class="[
+          'relative z-10 w-6 h-6 transition-colors',
+          iconColor,
+          isModelDownloading ? 'opacity-40' : '',
+        ]"
         fill="none"
         viewBox="0 0 24 24"
         stroke="currentColor"
