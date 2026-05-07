@@ -840,11 +840,12 @@ pub async fn download_model(model: String, app: AppHandle) -> Result<(), String>
             hasher.update(&chunk);
             downloaded = downloaded.saturating_add(chunk.len() as u64);
 
-            let pct = if total_bytes > 0 {
-                ((downloaded.min(total_bytes) * 100) / total_bytes) as u8
-            } else {
-                0
-            };
+            // `checked_div` returns None when total is zero — clippy's
+            // `manual_checked_ops` (Rust 1.95) flags the equivalent
+            // `if x > 0 { a / x } else { 0 }` pattern.
+            let pct = (downloaded.min(total_bytes) * 100)
+                .checked_div(total_bytes)
+                .unwrap_or(0) as u8;
             // Throttle: only emit when integer percent advances, plus one
             // last update at end. Avoids flooding the bridge with hundreds
             // of events for a 547 MB file.
