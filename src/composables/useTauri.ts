@@ -177,10 +177,15 @@ export function useTauri() {
   }
 
   async function setFavoriteLanguages(languages: Language[]): Promise<void> {
+    // `auto` is the auto-detect sentinel and must always be available in
+    // the cycle list. Re-injecting it here is the safety net for any
+    // caller that forgot (and self-heals settings.json files where the
+    // user removed it via the picker before we made auto unremovable).
+    const next = languages.includes("auto") ? languages : ["auto", ...languages];
     try {
-      await invoke("set_favorite_languages", { languages });
-      store.updateSettings({ favoriteLanguages: languages });
-      await saveSettings({ favoriteLanguages: languages });
+      await invoke("set_favorite_languages", { languages: next });
+      store.updateSettings({ favoriteLanguages: next });
+      await saveSettings({ favoriteLanguages: next });
       await broadcastSettingsUpdate();
     } catch (error) {
       console.error("Failed to set favorite languages:", error);

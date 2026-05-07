@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted } from "vue";
+import { computed, nextTick, ref, watch, onMounted, onUnmounted } from "vue";
 import {
   useAppStore,
   type Language,
@@ -7,7 +7,8 @@ import {
   ALL_LANGUAGES,
   LANGUAGE_DISPLAY_NAMES,
 } from "../stores/appStore";
-import { tierFor } from "../utils/languages";
+import { displayNameFor, tierFor } from "../utils/languages";
+import { flagUrlFor } from "../utils/flags";
 import { useTauri } from "../composables/useTauri";
 import { loadSettings, saveSettings, loadHistory, clearHistory as clearHistoryStore } from "../composables/useStore";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -76,6 +77,11 @@ let unlistenSettingsUpdated: UnlistenFn | null = null;
 async function syncFromPersistence() {
   try {
     const persisted = await loadSettings();
+    // `auto` must always be a favourite — it's the auto-detect sentinel.
+    // Self-heal here for any settings.json file that's missing it (e.g.
+    // saved with an earlier build that allowed removing auto).
+    const persistedFavs = persisted.favoriteLanguages ?? [...ALL_LANGUAGES];
+    const favs = persistedFavs.includes("auto") ? persistedFavs : ["auto", ...persistedFavs];
     store.updateSettings({
       language: persisted.language,
       model: persisted.model,
@@ -83,9 +89,13 @@ async function syncFromPersistence() {
       shortcut: persisted.shortcut,
       languageToggleShortcut: persisted.languageToggleShortcut ?? "",
       modelToggleShortcut: persisted.modelToggleShortcut ?? "",
-      favoriteLanguages: persisted.favoriteLanguages ?? [...ALL_LANGUAGES],
+      favoriteLanguages: favs,
       modelLanguages: persisted.modelLanguages ?? {},
     });
+    if (favs !== persistedFavs) {
+      // Persist the corrected list so the next launch starts clean.
+      await setFavoriteLanguages(favs);
+    }
   } catch (e) {
     console.error("Failed to load persisted settings:", e);
   }
@@ -254,21 +264,90 @@ async function handleModelToggleShortcutChange(newShortcut: string) {
   }
 }
 
-async function handleFavoriteLanguageToggle(lang: Language) {
-  const current = [...settings.value.favoriteLanguages];
-  const index = current.indexOf(lang);
-  if (index >= 0) current.splice(index, 1);
-  else current.push(lang);
-  await setFavoriteLanguages(current);
+async function removeFavoriteLanguage(lang: Language) {
+  // `auto` is the auto-detect sentinel — keep it pinned in favourites so
+  // the cycle shortcut always has at least one universally-usable option,
+  // and so users can always fall back to auto-detect via the picker.
+  if (lang === "auto") return;
+  const next = settings.value.favoriteLanguages.filter((l) => l !== lang);
+  await setFavoriteLanguages(next);
 }
 
-async function selectAllFavoriteLanguages() {
-  await setFavoriteLanguages([...ALL_LANGUAGES]);
+async function clearFavoriteLanguages() {
+  // Preserve `auto` for the same reason as above.
+  await setFavoriteLanguages(["auto"]);
 }
 
-async function deselectAllFavoriteLanguages() {
-  await setFavoriteLanguages([]);
+// ---- "Add language" popover ----------------------------------------------
+// Replaces the legacy giant 2-column checklist. Keeps the picker compact
+// even with 60+ languages: chips show what's selected, an inline search
+// dropdown adds new ones one by one.
+const addPickerOpen = ref(false);
+const addPickerSearch = ref("");
+const addPickerWrapperRef = ref<HTMLElement | null>(null);
+const addPickerSearchInputRef = ref<HTMLInputElement | null>(null);
+
+// Diacritic-insensitive lowercase: "francais" matches "Français",
+// "lv" matches Latviešu by code, "中" matches 中文 directly.
+function normalizeForSearch(s: string): string {
+  return s.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
 }
+
+function languageMatchesSearch(code: string, query: string): boolean {
+  if (!query) return true;
+  const q = normalizeForSearch(query);
+  if (code.toLowerCase().includes(q)) return true;
+  return normalizeForSearch(displayNameFor(code)).includes(q);
+}
+
+const addableLanguages = computed<Language[]>(() => {
+  const selected = new Set(settings.value.favoriteLanguages);
+  return ALL_LANGUAGES.filter((code) => code !== "auto" && !selected.has(code));
+});
+
+const filteredAddableLanguages = computed<Language[]>(() => {
+  return addableLanguages.value.filter((code) =>
+    languageMatchesSearch(code, addPickerSearch.value),
+  );
+});
+
+async function addFavoriteLanguage(lang: Language) {
+  if (settings.value.favoriteLanguages.includes(lang)) return;
+  const next = [...settings.value.favoriteLanguages, lang];
+  await setFavoriteLanguages(next);
+  addPickerSearch.value = "";
+  // Keep the popover open so the user can chain multiple adds.
+  // Re-focus the search so they can keep typing.
+  nextTick(() => addPickerSearchInputRef.value?.focus());
+}
+
+function handleAddPickerOutsideClick(e: MouseEvent) {
+  if (
+    addPickerWrapperRef.value &&
+    !addPickerWrapperRef.value.contains(e.target as Node)
+  ) {
+    addPickerOpen.value = false;
+  }
+}
+
+function handleAddPickerKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape") {
+    addPickerOpen.value = false;
+  } else if (e.key === "Enter" && filteredAddableLanguages.value.length > 0) {
+    e.preventDefault();
+    addFavoriteLanguage(filteredAddableLanguages.value[0]);
+  }
+}
+
+watch(addPickerOpen, (open) => {
+  if (open) {
+    document.addEventListener("mousedown", handleAddPickerOutsideClick);
+    nextTick(() => addPickerSearchInputRef.value?.focus());
+  } else {
+    document.removeEventListener("mousedown", handleAddPickerOutsideClick);
+    addPickerSearch.value = "";
+  }
+});
 
 async function handleModelLanguageToggle(modelId: string, lang: Language) {
   const current = modelLanguagesFor(modelId);
@@ -454,6 +533,24 @@ function getBackendColor(backend: string | undefined): string {
             </p>
           </div>
 
+          <!-- Model cycle shortcut -->
+          <div class="space-y-2">
+            <label class="block text-white font-medium">Model cycle shortcut</label>
+            <p class="text-white/50 text-sm">Press this shortcut to cycle through models compatible with the current language (reloads model — may take a few seconds)</p>
+            <ShortcutCapture
+              :model-value="settings.modelToggleShortcut"
+              :conflict-shortcuts="modelToggleConflicts"
+              :clearable="true"
+              @change="handleModelToggleShortcutChange"
+            />
+            <p v-if="modelToggleShortcutError" class="text-red-400 text-sm flex items-center gap-2">
+              <svg class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              {{ modelToggleShortcutError }}
+            </p>
+          </div>
+
           <!-- Language cycle shortcut -->
           <div class="space-y-2">
             <label class="block text-white font-medium">Language cycle shortcut</label>
@@ -472,52 +569,139 @@ function getBackendColor(backend: string | undefined): string {
             </p>
           </div>
 
-          <!-- Favorite languages checklist -->
+          <!-- Favorite languages: chips for selection + searchable Add picker.
+               Replaces the legacy 60-row checklist now that the supported
+               language set has grown well past what fits on screen. -->
           <div class="space-y-3">
-            <div class="flex items-center justify-between">
-              <div>
-                <label class="block text-white font-medium">Favorite languages</label>
-                <p class="text-white/50 text-sm">Select which languages the cycle shortcut walks through (min. 2)</p>
-              </div>
-              <div class="flex items-center gap-2">
-                <button
-                  @click="selectAllFavoriteLanguages"
-                  class="px-2 py-1 rounded text-xs bg-white/10 hover:bg-white/20 text-white/60 hover:text-white transition-colors"
-                >All</button>
-                <button
-                  @click="deselectAllFavoriteLanguages"
-                  class="px-2 py-1 rounded text-xs bg-white/10 hover:bg-white/20 text-white/60 hover:text-white transition-colors"
-                >None</button>
-              </div>
+            <div>
+              <label class="block text-white font-medium">Favorite languages</label>
+              <p class="text-white/50 text-sm">Languages cycled by the shortcut. Click + Add or remove with the ✕. Auto stays pinned.</p>
             </div>
-            <div class="grid grid-cols-2 gap-2">
-              <label
-                v-for="lang in ALL_LANGUAGES"
-                :key="lang"
-                class="flex items-center gap-2 p-2 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 transition-colors cursor-pointer"
+
+            <!-- Action row: Add picker + Clear all on the same line, above the chips -->
+            <div class="flex items-center gap-2">
+              <div class="relative inline-block" ref="addPickerWrapperRef">
+                <button
+                  @click="addPickerOpen = !addPickerOpen"
+                  :class="[
+                    'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs transition-colors',
+                    addPickerOpen
+                      ? 'bg-mic-listening/30 border border-mic-listening/60 text-white'
+                      : 'bg-white/10 hover:bg-white/15 border border-white/10 text-white/80 hover:text-white',
+                  ]"
+                >
+                  <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+                  </svg>
+                  Add language
+                </button>
+
+              <Transition
+                enter-active-class="transition-all duration-150 ease-out"
+                enter-from-class="opacity-0 -translate-y-1"
+                enter-to-class="opacity-100 translate-y-0"
+                leave-active-class="transition-all duration-100 ease-in"
+                leave-from-class="opacity-100 translate-y-0"
+                leave-to-class="opacity-0 -translate-y-1"
               >
-                <input
-                  type="checkbox"
-                  :checked="settings.favoriteLanguages.includes(lang)"
-                  @change="handleFavoriteLanguageToggle(lang)"
-                  class="w-4 h-4 rounded border-white/30 bg-white/10 text-mic-listening focus:ring-mic-listening focus:ring-offset-0"
+                <div
+                  v-if="addPickerOpen"
+                  class="absolute left-0 top-full mt-2 z-30 w-72 rounded-lg bg-gray-900/95 border border-white/15 shadow-xl backdrop-blur-sm overflow-hidden"
+                >
+                  <input
+                    ref="addPickerSearchInputRef"
+                    v-model="addPickerSearch"
+                    @keydown="handleAddPickerKeydown"
+                    type="text"
+                    placeholder="Search languages…"
+                    class="w-full px-3 py-2 bg-transparent border-b border-white/10 text-white text-sm placeholder-white/30 focus:outline-none"
+                  />
+                  <div class="max-h-72 overflow-y-auto py-1">
+                    <button
+                      v-for="code in filteredAddableLanguages"
+                      :key="`add-${code}`"
+                      @click="addFavoriteLanguage(code)"
+                      class="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-white/10 transition-colors"
+                    >
+                      <img
+                        v-if="flagUrlFor(code)"
+                        :src="flagUrlFor(code)"
+                        :alt="''"
+                        class="w-4 h-4 rounded-full flex-shrink-0"
+                      />
+                      <span class="w-4 h-4 rounded-full bg-white/10 flex-shrink-0" v-else></span>
+                      <span class="text-white text-sm flex-1 truncate">{{ displayNameFor(code) }}</span>
+                      <span
+                        v-if="tierFor(code) === 'medium'"
+                        class="text-amber-300/70 text-[10px]"
+                      >medium</span>
+                      <span class="text-white/30 text-[10px] font-mono">{{ code }}</span>
+                    </button>
+                    <div
+                      v-if="filteredAddableLanguages.length === 0"
+                      class="px-3 py-3 text-white/40 text-sm text-center"
+                    >
+                      <span v-if="addableLanguages.length === 0">All languages added</span>
+                      <span v-else>No language matches "{{ addPickerSearch }}"</span>
+                    </div>
+                  </div>
+                </div>
+              </Transition>
+              </div>
+
+              <!-- Clear all sits beside the Add button on the same line. -->
+              <button
+                v-if="settings.favoriteLanguages.length > 1"
+                @click="clearFavoriteLanguages"
+                class="px-3 py-1.5 rounded-md text-xs bg-white/10 hover:bg-red-500/30 border border-white/10 text-white/60 hover:text-white transition-colors"
+              >Clear all</button>
+            </div>
+
+            <!-- Selected favorites as chips, below the action row -->
+            <div class="flex flex-wrap gap-1.5">
+              <span
+                v-for="code in settings.favoriteLanguages"
+                :key="`fav-${code}`"
+                class="inline-flex items-center gap-1.5 pl-1.5 pr-1 py-1 rounded-md bg-white/10 border border-white/10 text-white text-xs"
+              >
+                <img
+                  v-if="flagUrlFor(code)"
+                  :src="flagUrlFor(code)"
+                  :alt="''"
+                  class="w-4 h-4 rounded-full flex-shrink-0"
                 />
-                <span class="text-white text-sm">{{ LANGUAGE_DISPLAY_NAMES[lang] }}</span>
-                <!-- Tier badge: surfaces Whisper's training-data quality
-                     so users know which non-mainstream languages may be
-                     less accurate. High tier (default) gets no badge. -->
+                <span class="w-4 h-4 rounded-full bg-white/15 flex-shrink-0" v-else></span>
+                <span>{{ displayNameFor(code) }}</span>
                 <span
-                  v-if="tierFor(lang) === 'medium'"
+                  v-if="tierFor(code) === 'medium'"
                   class="text-amber-300/70 text-[10px]"
                   title="Medium-quality language (100–1000 h Whisper training data)"
-                >· medium</span>
-              </label>
+                >·m</span>
+                <button
+                  v-if="code !== 'auto'"
+                  @click="removeFavoriteLanguage(code)"
+                  class="ml-0.5 w-4 h-4 rounded-full hover:bg-red-500/40 text-white/40 hover:text-white flex items-center justify-center transition-colors"
+                  :title="`Remove ${displayNameFor(code)}`"
+                >
+                  <svg class="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+                <span v-else class="ml-0.5 w-4 h-4" aria-hidden="true"></span>
+              </span>
             </div>
-            <p v-if="settings.favoriteLanguages.length < 2" class="text-amber-400 text-sm flex items-center gap-2">
+
+            <!-- The min-2 hint is only relevant when the user actually
+                 bound a language cycle shortcut — otherwise the favourites
+                 list is just a passive picker, no minimum required. -->
+            <p
+              v-if="settings.languageToggleShortcut && settings.favoriteLanguages.length < 2"
+              class="text-amber-400 text-sm flex items-center gap-2"
+            >
               <svg class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
               </svg>
-              Select at least 2 languages for the cycle shortcut to work
+              The language cycle shortcut needs at least 2 favourites to do anything.
             </p>
           </div>
 
@@ -557,23 +741,6 @@ function getBackendColor(backend: string | undefined): string {
             </div>
           </div>
 
-          <!-- Model cycle shortcut -->
-          <div class="space-y-2">
-            <label class="block text-white font-medium">Model cycle shortcut</label>
-            <p class="text-white/50 text-sm">Press this shortcut to cycle through models compatible with the current language (reloads model — may take a few seconds)</p>
-            <ShortcutCapture
-              :model-value="settings.modelToggleShortcut"
-              :conflict-shortcuts="modelToggleConflicts"
-              :clearable="true"
-              @change="handleModelToggleShortcutChange"
-            />
-            <p v-if="modelToggleShortcutError" class="text-red-400 text-sm flex items-center gap-2">
-              <svg class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              {{ modelToggleShortcutError }}
-            </p>
-          </div>
         </div>
 
         <!-- History Tab -->
