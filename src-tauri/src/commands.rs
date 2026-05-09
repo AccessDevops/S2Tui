@@ -1,5 +1,5 @@
 use crate::audio::AudioChunk;
-use crate::state::{AppState, AppStatus, Language, Permissions};
+use crate::state::{AppState, AppStatus, Language, Permissions, Settings};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -33,6 +33,16 @@ struct ModelEntry {
     /// Total size in bytes (used for progress when the response doesn't
     /// expose a Content-Length, e.g. transparently-compressed responses).
     size_bytes: u64,
+    /// Pre-known capabilities for the built-in. We can't run the
+    /// validator on these on app boot because the file might not be
+    /// downloaded yet; values are taken from the upstream Whisper
+    /// architecture spec and the quantisation variant we ship.
+    is_multilingual: bool,
+    n_vocab: i32,
+    n_audio_state: i32,
+    n_audio_layer: i32,
+    quant_label: &'static str,
+    size_class: &'static str,
 }
 
 const MODEL_REGISTRY: &[ModelEntry] = &[
@@ -43,6 +53,12 @@ const MODEL_REGISTRY: &[ModelEntry] = &[
         sha256: "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
         display_name: "Small",
         size_bytes: 190085487,
+        is_multilingual: true,
+        n_vocab: 51865,
+        n_audio_state: 768,
+        n_audio_layer: 12,
+        quant_label: "q5_1",
+        size_class: "small",
     },
     ModelEntry {
         id: "large-v3-turbo",
@@ -51,8 +67,58 @@ const MODEL_REGISTRY: &[ModelEntry] = &[
         sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
         display_name: "Large V3 Turbo",
         size_bytes: 601463531,
+        is_multilingual: true,
+        n_vocab: 51866,
+        // Turbo shares the encoder of large-v3 (n_audio_state=1280) but
+        // ships a 4-layer decoder. We surface it as size_class="large"
+        // for the user-facing label since perf characteristics line up
+        // with large more than with medium/small.
+        n_audio_state: 1280,
+        n_audio_layer: 4,
+        quant_label: "q5_0",
+        size_class: "large",
     },
 ];
+
+/// Resolve a model id to its on-disk path, dispatching between
+/// built-in (MODEL_REGISTRY) and user-imported (Settings.user_models).
+/// Used by every `load_*` / `download_*` command — without this,
+/// custom-model ids would always map to a non-existent
+/// `<models_dir>/ggml-<uuid>.bin` and load attempts would fail
+/// instantly, surfacing as a "broken" pill in the UI even though the
+/// file is fine.
+fn resolve_model_path(
+    state: &AppState,
+    app: &AppHandle,
+    model_id: &str,
+) -> Result<PathBuf, String> {
+    // Built-in lookup first — keeps the hot path identical to the
+    // pre-custom-models behaviour for existing users.
+    if let Some(entry) = MODEL_REGISTRY.iter().find(|e| e.id == model_id) {
+        return Ok(get_models_dir(app)?.join(entry.filename));
+    }
+    // Custom user-imported model. The path is whatever the user
+    // picked at import time, stored canonical inside Settings.
+    if let Some(user_model) = state.find_user_model(model_id) {
+        return Ok(user_model.path);
+    }
+    Err(format!("Unknown model id: {model_id}"))
+}
+
+/// Build the `ModelCapabilities` value for a built-in entry. Mirrors
+/// the shape returned by `whisper::compat::validate` for user-imported
+/// models so the frontend treats both kinds uniformly.
+fn builtin_capabilities(entry: &ModelEntry) -> crate::whisper::ModelCapabilities {
+    crate::whisper::ModelCapabilities {
+        is_multilingual: entry.is_multilingual,
+        size_class: entry.size_class.to_string(),
+        quant_label: entry.quant_label.to_string(),
+        n_vocab: entry.n_vocab,
+        n_audio_state: entry.n_audio_state,
+        n_audio_layer: entry.n_audio_layer,
+        file_size_bytes: entry.size_bytes,
+    }
+}
 
 /// Resolve the directory in which Whisper models live.
 ///
@@ -216,20 +282,15 @@ pub async fn load_whisper_model(
 ) -> Result<(), String> {
     tracing::info!("Loading Whisper model: {}", model);
 
-    // Simplified naming: ggml-{model}.bin (no quantization in filename)
-    let filename = format!("ggml-{}.bin", model);
-    let models_dir = get_models_dir(&app)?;
-
-    let model_path = models_dir.join(&filename);
+    // Resolve via the shared helper so user-imported (uuid-keyed)
+    // ids land on their actual stored path, not a synthesised
+    // `ggml-<uuid>.bin` that doesn't exist.
+    let model_path = resolve_model_path(&state, &app, &model)?;
     tracing::info!("Looking for model at: {}", model_path.display());
 
     if !model_path.exists() {
         tracing::error!("Model file not found: {}", model_path.display());
-        return Err(format!(
-            "Model not found: {}. Expected at: {}",
-            filename,
-            model_path.display()
-        ));
+        return Err(format!("Model file not found at {}", model_path.display()));
     }
 
     tracing::info!("Model file found, loading...");
@@ -262,6 +323,8 @@ pub async fn load_whisper_model(
 
     app.emit("model:loaded", &model)
         .map_err(|e| e.to_string())?;
+
+    persist_and_broadcast(&state, &app)?;
 
     tracing::info!("Whisper model loaded successfully: {}", model);
     Ok(())
@@ -297,18 +360,99 @@ async fn process_audio_chunks(
     tracing::info!("VAD processing stopped");
 }
 
+// =============================================================================
+// Persisted-state plumbing — single source of truth lives in AppState; every
+// mutator routes through `persist_and_broadcast` so disk and memory move
+// together and every other window picks up the change via one event.
+// =============================================================================
+
+/// Write the current Settings to `settings.json` and emit
+/// `settings:changed`. Called by every mutator command after the
+/// in-memory mutation. The two operations are paired here (rather
+/// than at each call site) so a future setter can't forget the
+/// broadcast and silently leak desync between windows.
+fn persist_and_broadcast(state: &AppState, app: &AppHandle) -> Result<(), String> {
+    state.get_settings().persist(app)?;
+    if let Err(e) = app.emit("settings:changed", ()) {
+        tracing::warn!("settings:changed broadcast failed: {e}");
+    }
+    Ok(())
+}
+
+/// Read the full Settings out of AppState. Frontend windows call
+/// this on boot (via `useSettingsSync`) and on every
+/// `settings:changed` event to refresh their local Pinia cache.
+#[tauri::command]
+pub fn get_settings(state: State<'_, AppState>) -> Settings {
+    state.get_settings()
+}
+
+/// Cap on how many history entries we keep. Mirrors the JS-side
+/// `MAX_HISTORY` so behaviour is identical to v0.1.7.
+const MAX_HISTORY: usize = 20;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddHistoryEntry {
+    pub text: String,
+    pub model_id: Option<String>,
+    pub duration_ms: Option<u64>,
+}
+
+/// Prepend a transcription to the history list, capped at
+/// `MAX_HISTORY`. Returns the freshly-created entry so the caller
+/// can use the id for further operations (e.g. delete) without
+/// another round-trip.
+#[tauri::command]
+pub fn add_history_entry(
+    entry: AddHistoryEntry,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<crate::state::HistoryEntry, String> {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let new_entry = crate::state::HistoryEntry {
+        id: timestamp.to_string(),
+        text: entry.text,
+        timestamp,
+        model_id: entry.model_id,
+        duration_ms: entry.duration_ms,
+    };
+    state.update_settings(|s| {
+        s.history.insert(0, new_entry.clone());
+        if s.history.len() > MAX_HISTORY {
+            s.history.truncate(MAX_HISTORY);
+        }
+    });
+    persist_and_broadcast(&state, &app)?;
+    Ok(new_entry)
+}
+
+/// Drop every entry from the history.
+#[tauri::command]
+pub fn clear_history(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
+    state.update_settings(|s| s.history.clear());
+    persist_and_broadcast(&state, &app)
+}
+
 // Settings commands
 #[tauri::command]
-pub fn set_model(name: String, state: State<'_, AppState>) -> Result<(), String> {
+pub fn set_model(name: String, state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
     tracing::info!("Setting model: {}", name);
     state.update_settings(|s| {
         s.model = name;
     });
-    Ok(())
+    persist_and_broadcast(&state, &app)
 }
 
 #[tauri::command]
-pub fn set_language(lang: String, state: State<'_, AppState>) -> Result<(), String> {
+pub fn set_language(
+    lang: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
     tracing::info!("Setting language: {}", lang);
     // Validate against the canonical Whisper language list. Unknown codes
     // collapse to auto-detect rather than crashing or silently selecting the
@@ -327,7 +471,7 @@ pub fn set_language(lang: String, state: State<'_, AppState>) -> Result<(), Stri
         whisper_code.as_deref().unwrap_or("auto-detect")
     );
 
-    Ok(())
+    persist_and_broadcast(&state, &app)
 }
 
 // Permission commands
@@ -472,7 +616,7 @@ pub fn set_shortcut(
         s.shortcut = shortcut.clone();
     });
     register_all_shortcuts(&app, &state)?;
-    Ok(())
+    persist_and_broadcast(&state, &app)
 }
 
 /// Update the language-cycle shortcut (empty string clears it).
@@ -487,7 +631,7 @@ pub fn set_language_toggle_shortcut(
         s.language_toggle_shortcut = shortcut.clone();
     });
     register_all_shortcuts(&app, &state)?;
-    Ok(())
+    persist_and_broadcast(&state, &app)
 }
 
 /// Update the model-cycle shortcut (empty string clears it).
@@ -502,7 +646,7 @@ pub fn set_model_toggle_shortcut(
         s.model_toggle_shortcut = shortcut.clone();
     });
     register_all_shortcuts(&app, &state)?;
-    Ok(())
+    persist_and_broadcast(&state, &app)
 }
 
 /// Update the favorite languages cycled by the language shortcut.
@@ -511,6 +655,7 @@ pub fn set_model_toggle_shortcut(
 pub fn set_favorite_languages(
     languages: Vec<String>,
     state: State<'_, AppState>,
+    app: AppHandle,
 ) -> Result<(), String> {
     let parsed: Vec<Language> = languages
         .iter()
@@ -523,7 +668,7 @@ pub fn set_favorite_languages(
     state.update_settings(|s| {
         s.favorite_languages = parsed;
     });
-    Ok(())
+    persist_and_broadcast(&state, &app)
 }
 
 /// Replace the whitelist of languages enabled for a single model.
@@ -533,6 +678,7 @@ pub fn set_model_languages(
     model: String,
     languages: Vec<String>,
     state: State<'_, AppState>,
+    app: AppHandle,
 ) -> Result<(), String> {
     let parsed: Vec<Language> = languages
         .iter()
@@ -546,7 +692,7 @@ pub fn set_model_languages(
     state.update_settings(|s| {
         s.model_languages.insert(model, parsed);
     });
-    Ok(())
+    persist_and_broadcast(&state, &app)
 }
 
 /// Update the language-cycle behaviour. Two literal values are accepted:
@@ -556,7 +702,11 @@ pub fn set_model_languages(
 /// compatible model when needed). Any other input is rejected so a
 /// hand-edited settings.json with garbage doesn't reach the listener.
 #[tauri::command]
-pub fn set_language_cycle_mode(mode: String, state: State<'_, AppState>) -> Result<(), String> {
+pub fn set_language_cycle_mode(
+    mode: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
     if mode != "model-first" && mode != "language-first" {
         return Err(format!(
             "Invalid language cycle mode: {} (expected 'model-first' or 'language-first')",
@@ -567,7 +717,44 @@ pub fn set_language_cycle_mode(mode: String, state: State<'_, AppState>) -> Resu
     state.update_settings(|s| {
         s.language_cycle_mode = mode;
     });
-    Ok(())
+    persist_and_broadcast(&state, &app)
+}
+
+/// Toggle the auto-copy-to-clipboard behaviour. v0.1.7 had this
+/// living in JS; centralising it here keeps the Settings struct as
+/// the sole source of truth.
+#[tauri::command]
+pub fn set_auto_copy(
+    enabled: bool,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    state.update_settings(|s| s.auto_copy = enabled);
+    persist_and_broadcast(&state, &app)
+}
+
+/// Persist that the user dismissed the Vulkan-not-available warning.
+/// v0.1.7 wrote this directly via the JS plugin-store; same idea as
+/// `set_auto_copy`.
+#[tauri::command]
+pub fn set_vulkan_warning_dismissed(
+    dismissed: bool,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    state.update_settings(|s| s.vulkan_warning_dismissed = dismissed);
+    persist_and_broadcast(&state, &app)
+}
+
+/// Persist that the user dismissed the welcome window.
+#[tauri::command]
+pub fn set_welcome_dismissed(
+    dismissed: bool,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    state.update_settings(|s| s.welcome_dismissed = dismissed);
+    persist_and_broadcast(&state, &app)
 }
 
 /// Get list of available models on disk
@@ -658,20 +845,14 @@ pub async fn load_whisper_model_with_options(
 ) -> Result<crate::whisper::ModelLoadResult, String> {
     tracing::info!("Loading Whisper model: {} (force_cpu={})", model, force_cpu);
 
-    // Build model path
-    let filename = format!("ggml-{}.bin", model);
-    let models_dir = get_models_dir(&app)?;
-    let model_path = models_dir.join(&filename);
-
+    // Same resolution as `load_whisper_model`: built-in or
+    // user-imported, always via the shared helper.
+    let model_path = resolve_model_path(&state, &app, &model)?;
     tracing::info!("Looking for model at: {}", model_path.display());
 
     if !model_path.exists() {
         tracing::error!("Model file not found: {}", model_path.display());
-        return Err(format!(
-            "Model not found: {}. Expected at: {}",
-            filename,
-            model_path.display()
-        ));
+        return Err(format!("Model file not found at {}", model_path.display()));
     }
 
     tracing::info!("Model file found, loading with options...");
@@ -720,6 +901,8 @@ pub async fn load_whisper_model_with_options(
         result.backend,
         result.fallback_used
     );
+
+    persist_and_broadcast(&state, &app)?;
 
     Ok(result)
 }
@@ -902,4 +1085,350 @@ pub async fn download_model(model: String, app: AppHandle) -> Result<(), String>
             Err(emit_error(&app, &msg))
         }
     }
+}
+
+// =============================================================================
+// Custom model import — Step 3 commands
+// =============================================================================
+
+/// Unified view of every model the app exposes (built-in + user-imported)
+/// returned by `list_all_models`. The frontend mirrors this into its
+/// Pinia `models` slice so both kinds render through the same row UI.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelInfoResponse {
+    pub id: String,
+    pub display_name: String,
+    /// `"builtin"` for the registry-defined models (small, large-v3-turbo),
+    /// `"custom"` for user-imported entries.
+    pub kind: String,
+    pub capabilities: crate::whisper::ModelCapabilities,
+    /// Whether the user has marked this model as disabled (excluded
+    /// from the cycle shortcut).
+    pub disabled: bool,
+    /// Transient flag set when a load attempt failed this session.
+    pub broken: bool,
+    /// Custom models include the canonical path; built-ins don't
+    /// (their path is derived from `get_models_dir`).
+    pub path: Option<String>,
+    /// Built-ins include their stable URL on the `models-v1` GitHub
+    /// Release (used by the welcome window's first-launch download).
+    pub url: Option<String>,
+    /// Filename inside `<models_dir>/`. `None` for custom models since
+    /// they're addressed by their absolute `path` instead.
+    pub filename: Option<String>,
+    /// Whether the file is on disk right now. Builds the
+    /// `downloaded` flag in the frontend store. For custom models we
+    /// check the imported path; for built-ins we check
+    /// `<models_dir>/<filename>`.
+    pub present: bool,
+}
+
+/// Return the merged list of built-in + user-imported models with
+/// their capabilities and current disabled/broken state. Called once
+/// on app boot by the frontend, then re-fetched whenever
+/// `settings:updated` fires (so two windows stay in sync).
+#[tauri::command]
+pub fn list_all_models(
+    state: State<AppState>,
+    app: AppHandle,
+) -> Result<Vec<ModelInfoResponse>, String> {
+    let models_dir = get_models_dir(&app)?;
+    let settings = state.get_settings();
+    let mut out = Vec::with_capacity(MODEL_REGISTRY.len() + settings.user_models.len());
+
+    for entry in MODEL_REGISTRY {
+        let path = models_dir.join(entry.filename);
+        out.push(ModelInfoResponse {
+            id: entry.id.to_string(),
+            display_name: entry.display_name.to_string(),
+            kind: "builtin".to_string(),
+            capabilities: builtin_capabilities(entry),
+            disabled: state.is_model_disabled(entry.id),
+            broken: state.is_model_broken(entry.id),
+            path: None,
+            url: Some(entry.url.to_string()),
+            filename: Some(entry.filename.to_string()),
+            present: path.is_file(),
+        });
+    }
+
+    for um in &settings.user_models {
+        out.push(ModelInfoResponse {
+            id: um.id.clone(),
+            display_name: um.display_name.clone(),
+            kind: "custom".to_string(),
+            capabilities: um.capabilities.clone(),
+            disabled: state.is_model_disabled(&um.id),
+            broken: state.is_model_broken(&um.id),
+            path: Some(um.path.to_string_lossy().to_string()),
+            url: None,
+            filename: None,
+            present: um.path.is_file(),
+        });
+    }
+
+    Ok(out)
+}
+
+/// Run the file-format validator on a candidate path, then layer the
+/// contextual checks (already-imported, inside-managed-dir) on top.
+/// Returns the validation result on success or a structured error
+/// the frontend can switch on by `kind` to render the right modal
+/// state.
+#[tauri::command]
+pub fn validate_custom_model(
+    state: State<AppState>,
+    app: AppHandle,
+    path: String,
+) -> Result<crate::whisper::ValidationResult, crate::whisper::ModelCompatError> {
+    let candidate = PathBuf::from(&path);
+
+    // Refuse files inside our managed `models/` directory. They're
+    // either already part of MODEL_REGISTRY (about to be downloaded)
+    // or some leftover the user shouldn't be importing as a custom
+    // entry. `get_models_dir` returns Err in obscure platform setups
+    // — fall through silently in that case rather than blocking the
+    // import.
+    if let Ok(managed_dir) = get_models_dir(&app) {
+        if let (Ok(canon_candidate), Ok(canon_managed)) =
+            (candidate.canonicalize(), managed_dir.canonicalize())
+        {
+            if canon_candidate.starts_with(&canon_managed) {
+                return Err(crate::whisper::ModelCompatError::InsideManagedDir);
+            }
+        }
+    }
+
+    // Reject duplicates by canonical path. `path.canonicalize()` will
+    // fail for non-existent files, but the validator checks
+    // existence anyway via `metadata`.
+    let canon_candidate = candidate.canonicalize().ok();
+    if let Some(canon) = canon_candidate.as_ref() {
+        let settings = state.get_settings();
+        if let Some(existing) = settings
+            .user_models
+            .iter()
+            .find(|m| m.path.canonicalize().ok().as_ref() == Some(canon))
+        {
+            return Err(crate::whisper::ModelCompatError::AlreadyImported {
+                existing_display_name: existing.display_name.clone(),
+            });
+        }
+    }
+
+    crate::whisper::compat::validate(&candidate)
+}
+
+/// Step 4 errors specific to the add/remove flows. File-format errors
+/// from the validator path use `ModelCompatError`; these wrap them
+/// plus the contextual cases (active-model deletion blocking,
+/// mid-recording, etc.).
+#[derive(Debug, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum AddModelError {
+    /// The candidate file no longer validates — race window between
+    /// the `validate_custom_model` call (when the modal opened) and
+    /// the `add_custom_model` call (when the user hit Save).
+    Compat(crate::whisper::ModelCompatError),
+    /// Display name is empty / whitespace-only after trim.
+    EmptyName,
+    /// settings.json couldn't be written (disk full, permission issue,
+    /// etc.). Surfaces the underlying message so the modal can show
+    /// it; the in-memory AppState mutation is rolled back by virtue
+    /// of the AppState write lock having already been released.
+    PersistFailed { reason: String },
+}
+
+impl From<crate::whisper::ModelCompatError> for AddModelError {
+    fn from(e: crate::whisper::ModelCompatError) -> Self {
+        AddModelError::Compat(e)
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum RemoveModelError {
+    /// The user is mid-recording; switching model now would kill the
+    /// in-flight transcription.
+    MidRecording,
+    /// The deleted model is currently active and we can't find an
+    /// alternative (every other model disabled or broken).
+    NoFallback,
+    /// The id doesn't match a user-imported model. Built-ins can't
+    /// be removed via this path.
+    NotFound,
+}
+
+/// Persist a user-imported Whisper model. Re-runs the validator (the
+/// file may have been replaced between the modal opening and the
+/// Save click), then commits the new entry to AppState. Returns the
+/// fully-populated `UserModel` so the frontend can persist
+/// settings.json without an extra round-trip.
+#[tauri::command]
+pub fn add_custom_model(
+    state: State<AppState>,
+    app: AppHandle,
+    name: String,
+    path: String,
+) -> Result<crate::state::UserModel, AddModelError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(AddModelError::EmptyName);
+    }
+
+    let candidate = PathBuf::from(&path);
+    let validation = crate::whisper::compat::validate(&candidate)?;
+
+    // Canonicalise so duplicate detection survives `./relative` paths
+    // and symlinks. Falls back to the original path on platforms
+    // where canonicalize fails (rare on the systems we ship to but
+    // worth handling).
+    let canonical = candidate.canonicalize().unwrap_or(candidate);
+
+    let added_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    let model = crate::state::UserModel {
+        id: uuid::Uuid::new_v4().to_string(),
+        display_name: trimmed.to_string(),
+        path: canonical,
+        added_at,
+        capabilities: validation.capabilities,
+    };
+
+    state
+        .add_user_model(model.clone())
+        .map_err(|existing_name| {
+            AddModelError::Compat(crate::whisper::ModelCompatError::AlreadyImported {
+                existing_display_name: existing_name,
+            })
+        })?;
+
+    // English-only constraint: pre-populate the per-model language
+    // whitelist with `["auto", "en"]` so the cycle shortcut and the
+    // chip picker can treat non-English languages as "not allowed
+    // for this model" via the existing `model_languages` plumbing.
+    // The user can edit the whitelist later via the General tab.
+    if !model.capabilities.is_multilingual {
+        state.update_settings(|s| {
+            s.model_languages.insert(
+                model.id.clone(),
+                vec![
+                    crate::state::Language::auto(),
+                    crate::state::Language::from_code("en")
+                        .unwrap_or_else(crate::state::Language::auto),
+                ],
+            );
+        });
+    }
+
+    persist_and_broadcast(&state, &app).map_err(|e| AddModelError::PersistFailed { reason: e })?;
+
+    Ok(model)
+}
+
+/// Remove a user-imported model from the registry. Does NOT delete
+/// the file on disk. If the removed model is currently active,
+/// auto-switch to the first available alternative (built-in or
+/// custom, downloaded + not disabled + not broken). Returns the new
+/// active model id, or `None` if the removed model wasn't active.
+#[tauri::command]
+pub fn remove_custom_model(
+    state: State<AppState>,
+    app: AppHandle,
+    id: String,
+) -> Result<Option<String>, RemoveModelError> {
+    // Refuse to mutate while a recording is in flight.
+    if state.get_status() != AppStatus::Idle {
+        return Err(RemoveModelError::MidRecording);
+    }
+
+    // Confirm the id matches a user model (built-ins aren't removable
+    // through this path).
+    if state.find_user_model(&id).is_none() {
+        return Err(RemoveModelError::NotFound);
+    }
+
+    let active_was_target = state.get_settings().model == id;
+    let new_active: Option<String> = if active_was_target {
+        // Find the first available alternative. Order matters — we
+        // walk the same order `list_all_models` exposes (built-ins
+        // first, then user models). Built-ins must be on disk;
+        // disabled/broken excluded; the model being deleted excluded.
+        let models_dir = get_models_dir(&app).map_err(|_| RemoveModelError::NoFallback)?;
+
+        let settings = state.get_settings();
+        let mut candidate: Option<String> = None;
+
+        for entry in MODEL_REGISTRY {
+            if entry.id == id {
+                continue;
+            }
+            let on_disk = models_dir.join(entry.filename).is_file();
+            if !on_disk {
+                continue;
+            }
+            if state.is_model_disabled(entry.id) || state.is_model_broken(entry.id) {
+                continue;
+            }
+            candidate = Some(entry.id.to_string());
+            break;
+        }
+        if candidate.is_none() {
+            for um in &settings.user_models {
+                if um.id == id {
+                    continue;
+                }
+                if !um.path.is_file() {
+                    continue;
+                }
+                if state.is_model_disabled(&um.id) || state.is_model_broken(&um.id) {
+                    continue;
+                }
+                candidate = Some(um.id.clone());
+                break;
+            }
+        }
+
+        let next = candidate.ok_or(RemoveModelError::NoFallback)?;
+        state.update_settings(|s| s.model = next.clone());
+        Some(next)
+    } else {
+        None
+    };
+
+    // remove_user_model also clears the disabled/broken flags for
+    // this id; cf. state.rs.
+    state.remove_user_model(&id);
+
+    persist_and_broadcast(&state, &app).map_err(|_| RemoveModelError::NoFallback)?;
+
+    Ok(new_active)
+}
+
+/// Toggle the disabled flag on a model id. Applies to built-ins and
+/// custom models alike. Disabled models are skipped by the cycle
+/// shortcuts; selecting one via Settings re-enables it implicitly
+/// (the frontend handles the implicit re-enable; this command is
+/// the explicit toggle).
+#[tauri::command]
+pub fn set_model_disabled(
+    state: State<AppState>,
+    app: AppHandle,
+    id: String,
+    disabled: bool,
+) -> Result<(), String> {
+    state.set_model_disabled(&id, disabled);
+    persist_and_broadcast(&state, &app)
 }

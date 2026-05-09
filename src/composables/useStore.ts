@@ -1,10 +1,19 @@
-import { load, Store } from "@tauri-apps/plugin-store";
+import { invoke } from "@tauri-apps/api/core";
 import type { Settings, HistoryEntry, ModelId } from "../stores/appStore";
-import { codesByTier } from "../utils/languages";
 
-const STORE_FILE = "settings.json";
-
-let store: Store | null = null;
+/// All persistence is now backend-driven (cf. CLAUDE.md "Persisted
+/// state"). This module is a thin wrapper around the Tauri commands
+/// `get_settings`, `add_history_entry`, `clear_history` for callers
+/// that prefer the historical helper names. New code should call
+/// `invoke` directly or, better, use `useSettingsSync` so both the
+/// fetch and the cross-window cache invalidation are covered in one
+/// call.
+///
+/// The previous `tauri-plugin-store` JS pathway is gone: the Rust
+/// backend reads/writes `settings.json` itself, atomically inside
+/// every setter command, and emits `settings:changed` so all
+/// windows refresh their Pinia cache. This eliminates the per-slice
+/// "did I plumb the listener?" bug class.
 
 export interface PersistedSettings extends Settings {
   history: HistoryEntry[];
@@ -12,82 +21,39 @@ export interface PersistedSettings extends Settings {
   welcomeDismissed: boolean;
 }
 
-// Default favourites = the high tier only. The full registry now exposes
-// ~60 languages, but cycling through all of them with a shortcut is
-// unwieldy out of the box; users opt extras in via the Settings checklist.
-const defaultSettings: PersistedSettings = {
-  language: "auto",
-  model: "large-v3-turbo",
-  autoCopy: true,
-  shortcut: "CommandOrControl+Shift+Space",
-  languageToggleShortcut: "",
-  modelToggleShortcut: "",
-  favoriteLanguages: codesByTier("high"),
-  modelLanguages: {},
-  languageCycleMode: "model-first",
-  history: [],
-  vulkanWarningDismissed: false,
-  welcomeDismissed: false,
-};
-
-async function getStore(): Promise<Store> {
-  if (!store) {
-    store = await load(STORE_FILE, {
-      defaults: { settings: defaultSettings },
-      autoSave: 300,
-    });
-  }
-  return store;
-}
-
+/** Fetch the full Settings struct from the Rust backend. Single
+ *  source of truth — no JSON-on-disk parsing in the frontend. */
 export async function loadSettings(): Promise<PersistedSettings> {
-  try {
-    const s = await getStore();
-    const settings = await s.get<PersistedSettings>("settings");
-    if (settings) {
-      return { ...defaultSettings, ...settings };
-    }
-  } catch (error) {
-    console.error("Failed to load settings:", error);
-  }
-  return defaultSettings;
+  return await invoke<PersistedSettings>("get_settings");
 }
 
-export async function saveSettings(settings: Partial<PersistedSettings>): Promise<void> {
-  try {
-    const s = await getStore();
-    const current = await loadSettings();
-    const updated = { ...current, ...settings };
-    await s.set("settings", updated);
-    await s.save();
-  } catch (error) {
-    console.error("Failed to save settings:", error);
-  }
-}
-
+/** Read just the history slice. Implemented as a projection of
+ *  `loadSettings()` to avoid a duplicate command. The full Settings
+ *  payload is small (< 5 KB even with 20 history entries) so the
+ *  extra fields are inexpensive. */
 export async function loadHistory(): Promise<HistoryEntry[]> {
   const settings = await loadSettings();
-  return settings.history || [];
+  return settings.history ?? [];
 }
 
-export async function saveHistory(history: HistoryEntry[]): Promise<void> {
-  await saveSettings({ history: history.slice(0, 20) });
+/** Persist a freshly transcribed clip. Returns the entry the
+ *  backend created (with its assigned id + timestamp) so the
+ *  caller can wire it into the UI without a second round-trip. */
+export async function addHistoryEntry(
+  text: string,
+  modelId?: string,
+  durationMs?: number,
+): Promise<HistoryEntry> {
+  return await invoke<HistoryEntry>("add_history_entry", {
+    entry: {
+      text,
+      modelId: modelId as ModelId | undefined,
+      durationMs,
+    },
+  });
 }
 
-export async function addHistoryEntry(text: string, modelId?: string, durationMs?: number): Promise<HistoryEntry> {
-  const entry: HistoryEntry = {
-    id: Date.now().toString(),
-    text,
-    timestamp: Date.now(),
-    modelId: modelId as ModelId | undefined,
-    durationMs,
-  };
-  const settings = await loadSettings();
-  const history = [entry, ...(settings.history || [])].slice(0, 20);
-  await saveSettings({ history });
-  return entry;
-}
-
+/** Wipe the history list. */
 export async function clearHistory(): Promise<void> {
-  await saveSettings({ history: [] });
+  await invoke("clear_history");
 }

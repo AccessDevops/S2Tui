@@ -11,11 +11,13 @@ import { displayNameFor, tierFor } from "../utils/languages";
 import { flagUrlFor } from "../utils/flags";
 import { useTauri } from "../composables/useTauri";
 import { useModelDownloadTracker } from "../composables/useModelDownloadTracker";
-import { loadSettings, saveSettings, loadHistory, clearHistory as clearHistoryStore } from "../composables/useStore";
+import { useSettingsSync } from "../composables/useSettingsSync";
+import { loadHistory, clearHistory as clearHistoryStore } from "../composables/useStore";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import ShortcutCapture from "../components/ShortcutCapture.vue";
+import CustomModelImportDialog from "../components/CustomModelImportDialog.vue";
 
 const store = useAppStore();
 const {
@@ -29,6 +31,9 @@ const {
   loadWhisperModel,
   checkSystemHealth,
   checkPermissions,
+  refreshModelList,
+  setModelDisabled,
+  removeCustomModel,
 } = useTauri();
 
 const shortcutError = ref<string | null>(null);
@@ -68,41 +73,33 @@ function modelLanguagesFor(modelId: string): Language[] {
   return list ?? [...settings.value.favoriteLanguages];
 }
 
+/** True if `lang` can be enabled for `model` in the per-model
+ *  whitelist UI. English-only models (`isMultilingual=false`) only
+ *  accept `auto` and `en`; anything else is silently ignored by
+ *  whisper.cpp at decode time, so we forbid it at the UI layer to
+ *  spare the user the surprise. Multilingual models accept every
+ *  favorite. */
+function isLangAllowedForModel(
+  model: { capabilities?: { isMultilingual: boolean } },
+  lang: Language,
+): boolean {
+  if (model.capabilities?.isMultilingual !== false) return true;
+  return lang === "auto" || lang === "en";
+}
+
 const activeTab = ref<"general" | "models" | "permissions" | "history" | "system">("general");
+const importDialogOpen = ref(false);
+
+async function handleModelImported() {
+  // The dialog already pushed the new model into the backend +
+  // persisted settings.json. Re-sync our local view of `models` so
+  // the row appears immediately without waiting for `settings:updated`.
+  await refreshModelList();
+}
 const copiedId = ref<string | null>(null);
 const loadingModelId = ref<ModelId | null>(null);
 let unlistenHistory: UnlistenFn | null = null;
-let unlistenSettingsUpdated: UnlistenFn | null = null;
-
-// Pull latest settings from persistence into the local Pinia store. Used both
-// for the initial load on mount and as the handler for `settings:updated`
-// events emitted by the main window (toggle shortcut, etc.).
-async function syncFromPersistence() {
-  try {
-    const persisted = await loadSettings();
-    // `auto` must always be a favourite — it's the auto-detect sentinel.
-    // Self-heal here for any settings.json file that's missing it (e.g.
-    // saved with an earlier build that allowed removing auto).
-    const persistedFavs = persisted.favoriteLanguages ?? [...ALL_LANGUAGES];
-    const favs = persistedFavs.includes("auto") ? persistedFavs : ["auto", ...persistedFavs];
-    store.updateSettings({
-      language: persisted.language,
-      model: persisted.model,
-      autoCopy: persisted.autoCopy,
-      shortcut: persisted.shortcut,
-      languageToggleShortcut: persisted.languageToggleShortcut ?? "",
-      modelToggleShortcut: persisted.modelToggleShortcut ?? "",
-      favoriteLanguages: favs,
-      modelLanguages: persisted.modelLanguages ?? {},
-    });
-    if (favs !== persistedFavs) {
-      // Persist the corrected list so the next launch starts clean.
-      await setFavoriteLanguages(favs);
-    }
-  } catch (e) {
-    console.error("Failed to load persisted settings:", e);
-  }
-}
+let unlistenSettingsSync: UnlistenFn | null = null;
 
 function handleKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") {
@@ -114,32 +111,29 @@ onMounted(async () => {
   // Note: Do NOT call initListeners() here - it triggers initApp() which would
   // re-open the welcome modal. Settings window has its own Pinia context (not shared).
 
-  // Settings window has its own Pinia context, so the persisted toggle config
-  // (favorite languages, per-model whitelists, shortcuts) must be loaded here.
-  await syncFromPersistence();
+  // The Settings window owns its own Pinia store. `useSettingsSync`
+  // does the initial fetch from the Rust backend (single source of
+  // truth) AND registers a `settings:changed` listener so any
+  // mutation in another window flows back here automatically. One
+  // call replaces the previous trio of `syncFromPersistence`,
+  // `refreshModelList`, and the per-event handler that had to be
+  // updated every time a new persisted slice was added.
+  unlistenSettingsSync = await useSettingsSync().attach();
 
-  // Same per-window Pinia constraint applies to the model-download slice —
-  // without this, the Models tab rows would keep showing `Use`/`Active`
-  // during a download because no listener ever populated the slice in
-  // this webview's context.
+  // Same Pinia-per-window constraint for the in-flight model-
+  // download events. Lives on its own helper because the slice is
+  // transient (not part of `Settings`).
   await useModelDownloadTracker().attach();
 
-  // Load history from persistence
-  const savedHistory = await loadHistory();
-  store.setHistory(savedHistory);
-
-  // Listen for history updates from other windows (e.g., main window after transcription)
+  // History updates from other windows still land via the
+  // `history:updated` event. (The backend emits both
+  // `settings:changed` and `history:updated` after a new transcript
+  // — the latter pre-dates this refactor and a few callers still
+  // depend on it; keeping it costs nothing and lets this listener
+  // refresh history without a full settings round-trip.)
   unlistenHistory = await listen("history:updated", async () => {
-    // Reload history from persistence when notified of updates
     const updatedHistory = await loadHistory();
     store.setHistory(updatedHistory);
-  });
-
-  // Listen for cross-window settings mutations (toggle shortcuts in the main
-  // window, future tray actions, …) so this UI reflects them live without
-  // requiring the user to close and reopen the Settings window.
-  unlistenSettingsUpdated = await listen("settings:updated", async () => {
-    await syncFromPersistence();
   });
 
   // Check permissions for the Permissions tab
@@ -174,7 +168,7 @@ onUnmounted(() => {
 
   // Clean up event listeners
   if (unlistenHistory) unlistenHistory();
-  if (unlistenSettingsUpdated) unlistenSettingsUpdated();
+  if (unlistenSettingsSync) unlistenSettingsSync();
 });
 
 // History handlers
@@ -237,7 +231,9 @@ async function handleLanguageChange(e: Event) {
 async function handleAutoCopyChange(e: Event) {
   const enabled = (e.target as HTMLInputElement).checked;
   store.updateSettings({ autoCopy: enabled });
-  await saveSettings({ autoCopy: enabled });
+  // Backend `set_auto_copy` command persists + emits settings:changed
+  // atomically. No JS-side saveSettings/broadcast dance any more.
+  await invoke("set_auto_copy", { enabled });
 }
 
 async function handleShortcutChange(newShortcut: string) {
@@ -379,6 +375,20 @@ async function handleModelLanguageToggle(modelId: string, lang: Language) {
 async function handleSelectModel(modelId: ModelId) {
   const model = models.value.find((m) => m.id === modelId);
   if (model && model.downloaded) {
+    // Implicit re-enable: clicking "Use" on a disabled model un-disables
+    // it and proceeds with the load. Avoids forcing the user to first
+    // toggle the eye icon then click Use.
+    if (model.disabled) {
+      try {
+        await setModelDisabled(modelId, false);
+      } catch (err) {
+        console.error("Failed to re-enable model:", err);
+      }
+    }
+    // Same idea for the broken flag: clicking Use is implicitly Retry.
+    if (model.broken) {
+      store.clearModelBroken(modelId);
+    }
     loadingModelId.value = modelId;
     try {
       await loadWhisperModel(modelId);
@@ -389,6 +399,40 @@ async function handleSelectModel(modelId: ModelId) {
       loadingModelId.value = null;
     }
   }
+}
+
+// ---- Step 6 helpers: per-row Disable + Delete + Retry ---------------
+
+async function handleToggleDisable(model: ReturnType<() => typeof models.value[number]>) {
+  try {
+    await setModelDisabled(model.id, !model.disabled);
+  } catch (err) {
+    console.error("Failed to toggle model disabled:", err);
+    store.showError("Failed to update model. See logs.");
+  }
+}
+
+async function handleDeleteCustomModel(model: ReturnType<() => typeof models.value[number]>) {
+  // Single confirmation step. We rely on the native window.confirm so
+  // we don't need a bespoke confirmation modal — the message itself
+  // makes the "file is kept on disk" guarantee explicit so the user
+  // doesn't fear data loss.
+  const ok = window.confirm(
+    `Remove "${model.name}" from imported models?\n\nThe file on disk is kept untouched. You can re-import it later via the Add button.`,
+  );
+  if (!ok) return;
+  try {
+    await removeCustomModel(model.id);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : JSON.stringify(err);
+    console.error("Failed to remove custom model:", err);
+    store.showError(`Failed to remove model: ${msg}`);
+  }
+}
+
+async function handleRetryBroken(model: ReturnType<() => typeof models.value[number]>) {
+  store.clearModelBroken(model.id);
+  await handleSelectModel(model.id);
 }
 
 // Look up the per-model download item from the appStore slice. Returns
@@ -482,6 +526,13 @@ function getBackendColor(backend: string | undefined): string {
 
 <template>
   <div class="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900">
+    <!-- Custom-model import modal. Mounted at the page root so its
+         fixed-position overlay covers the full Settings window. -->
+    <CustomModelImportDialog
+      v-model:open="importDialogOpen"
+      @model:added="handleModelImported"
+    />
+
     <!-- Title bar drag region -->
     <div data-tauri-drag-region class="h-8 flex items-center justify-between px-4 bg-black/20">
       <span class="text-white/60 text-sm font-medium">S2Tui Settings</span>
@@ -843,18 +894,37 @@ function getBackendColor(backend: string | undefined): string {
                 :key="m.id"
                 class="p-3 rounded-lg bg-white/5 border border-white/10 space-y-2"
               >
-                <div class="text-white text-sm font-medium">{{ m.name }}</div>
+                <div class="flex items-center gap-2">
+                  <span class="text-white text-sm font-medium">{{ m.name }}</span>
+                  <span v-if="!m.capabilities?.isMultilingual" class="text-xs bg-amber-500/20 text-amber-200 px-1.5 py-0.5 rounded">
+                    EN only
+                  </span>
+                </div>
+                <p
+                  v-if="!m.capabilities?.isMultilingual"
+                  class="text-amber-200/70 text-xs"
+                >
+                  This model only transcribes English. Other favorite
+                  languages can't be enabled for it.
+                </p>
                 <div class="flex flex-wrap gap-2">
                   <label
                     v-for="lang in settings.favoriteLanguages"
                     :key="`${m.id}-${lang}`"
-                    class="flex items-center gap-1.5 px-2 py-1 rounded bg-white/5 border border-white/10 cursor-pointer hover:bg-white/10 transition-colors"
+                    :class="[
+                      'flex items-center gap-1.5 px-2 py-1 rounded bg-white/5 border border-white/10 transition-colors',
+                      isLangAllowedForModel(m, lang)
+                        ? 'cursor-pointer hover:bg-white/10'
+                        : 'cursor-not-allowed opacity-40'
+                    ]"
+                    :title="!isLangAllowedForModel(m, lang) ? 'This model only supports English' : ''"
                   >
                     <input
                       type="checkbox"
                       :checked="modelLanguagesFor(m.id).includes(lang)"
+                      :disabled="!isLangAllowedForModel(m, lang)"
                       @change="handleModelLanguageToggle(m.id, lang)"
-                      class="w-3.5 h-3.5 rounded border-white/30 bg-white/10 text-mic-listening focus:ring-mic-listening focus:ring-offset-0"
+                      class="w-3.5 h-3.5 rounded border-white/30 bg-white/10 text-mic-listening focus:ring-mic-listening focus:ring-offset-0 disabled:opacity-40"
                     />
                     <span class="text-white text-xs">{{ LANGUAGE_DISPLAY_NAMES[lang] }}</span>
                   </label>
@@ -945,9 +1015,22 @@ function getBackendColor(backend: string | undefined): string {
 
         <!-- Models Tab -->
         <div v-if="activeTab === 'models'" class="max-w-2xl space-y-6">
-          <div>
-            <h2 class="text-white text-xl font-semibold mb-1">Whisper Models</h2>
-            <p class="text-white/50 text-sm">Select the speech recognition model to use</p>
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <h2 class="text-white text-xl font-semibold mb-1">Whisper Models</h2>
+              <p class="text-white/50 text-sm">Select the speech recognition model to use</p>
+            </div>
+            <button
+              type="button"
+              @click="importDialogOpen = true"
+              class="px-3 py-2 rounded-lg bg-blue-500/15 hover:bg-blue-500/25 border border-blue-400/40 text-blue-200 text-sm font-medium flex items-center gap-2 transition-colors flex-shrink-0"
+              title="Add a custom Whisper model from a .bin file on disk"
+            >
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+              </svg>
+              Add
+            </button>
           </div>
 
           <div class="grid gap-4">
@@ -956,21 +1039,36 @@ function getBackendColor(backend: string | undefined): string {
               :key="model.id"
               :class="[
                 'p-5 rounded-xl border transition-all',
-                settings.model === model.id
+                model.disabled ? 'opacity-60' : '',
+                settings.model === model.id && !model.disabled
                   ? 'bg-mic-listening/10 border-mic-listening'
                   : 'bg-white/5 border-white/10 hover:bg-white/10'
               ]"
             >
               <div class="flex items-start justify-between">
                 <div class="flex-1">
-                  <div class="flex items-center gap-3">
+                  <div class="flex items-center gap-2 flex-wrap">
                     <span class="text-white text-lg font-semibold">{{ model.name }}</span>
-                    <span v-if="settings.model === model.id && model.downloaded" class="text-xs bg-mic-listening/30 text-mic-listening px-2 py-1 rounded-full">
+                    <span v-if="settings.model === model.id && model.downloaded && !model.disabled && !model.broken" class="text-xs bg-mic-listening/30 text-mic-listening px-2 py-0.5 rounded-full">
                       Active
+                    </span>
+                    <span v-if="model.disabled" class="text-xs bg-white/10 text-white/50 px-2 py-0.5 rounded-full">
+                      Disabled
+                    </span>
+                    <span v-if="model.broken" class="text-xs bg-red-500/20 text-red-300 px-2 py-0.5 rounded-full" :title="model.brokenReason || ''">
+                      Broken
+                    </span>
+                    <span v-if="!model.capabilities?.isMultilingual" class="text-xs bg-amber-500/20 text-amber-200 px-2 py-0.5 rounded-full" title="English-only model">
+                      EN only
+                    </span>
+                    <span v-if="model.kind === 'custom'" class="text-xs bg-blue-500/20 text-blue-200 px-2 py-0.5 rounded-full">
+                      Custom
                     </span>
                   </div>
                   <div class="flex items-center gap-3 mt-2">
-                    <span class="text-white/50">{{ model.size }}</span>
+                    <span class="text-white/50">
+                      {{ model.size }}<template v-if="model.capabilities?.quantLabel"> · {{ model.capabilities.quantLabel }}</template>
+                    </span>
                     <!-- Live byte counter while downloading. Hidden in idle/done
                          states to keep the row visually quiet. -->
                     <span
@@ -988,9 +1086,41 @@ function getBackendColor(backend: string | undefined): string {
                   </div>
                 </div>
 
-                <div class="flex items-center gap-3">
-                  <!-- Downloading: disabled placeholder; the inline progress
-                       bar below the row carries the live %. -->
+                <div class="flex items-center gap-2">
+                  <!-- Icon-only Disable toggle. Applies to built-in and
+                       custom models alike. Eye/eye-off pair driven by
+                       `model.disabled`. -->
+                  <button
+                    type="button"
+                    @click="handleToggleDisable(model)"
+                    :title="model.disabled ? 'Enable (include in cycle shortcut)' : 'Disable (skip in cycle shortcut)'"
+                    class="p-2 rounded-lg hover:bg-white/10 text-white/40 hover:text-white/80 transition-colors"
+                  >
+                    <svg v-if="!model.disabled" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                    </svg>
+                    <svg v-else class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/>
+                    </svg>
+                  </button>
+
+                  <!-- Icon-only Delete (custom models only). Confirms
+                       via window.confirm — the file on disk is kept. -->
+                  <button
+                    v-if="model.kind === 'custom'"
+                    type="button"
+                    @click="handleDeleteCustomModel(model)"
+                    title="Remove from imported models (file on disk is kept)"
+                    class="p-2 rounded-lg hover:bg-red-500/15 text-white/40 hover:text-red-300 transition-colors"
+                  >
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                    </svg>
+                  </button>
+
+                  <!-- Primary action: state machine over downloading /
+                       pending / download-error / broken / use / active. -->
                   <button
                     v-if="downloadStateFor(model.id) === 'downloading'"
                     disabled
@@ -1019,10 +1149,27 @@ function getBackendColor(backend: string | undefined): string {
                     </svg>
                     Retry
                   </button>
-                  <!-- Select button — same behaviour as before, only rendered
-                       when no download activity is happening for this row. -->
                   <button
-                    v-else-if="settings.model !== model.id && model.downloaded"
+                    v-else-if="model.broken && model.downloaded"
+                    @click="handleRetryBroken(model)"
+                    :disabled="loadingModelId !== null"
+                    class="px-4 py-2 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-300 text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50"
+                  >
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                    </svg>
+                    Retry
+                  </button>
+                  <!-- "Use" — visible when:
+                       - model is downloaded
+                       - download state is idle (no in-flight)
+                       - either it's not the active one (regular Use) OR
+                         it IS the active but it's disabled (so Use here
+                         implicitly re-enables it).
+                       Built-in models without a file on disk fall back
+                       to render nothing (download flow is on by then). -->
+                  <button
+                    v-else-if="model.downloaded && (settings.model !== model.id || model.disabled)"
                     @click="handleSelectModel(model.id)"
                     :disabled="loadingModelId !== null"
                     class="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white text-sm font-medium transition-colors disabled:opacity-50 flex items-center gap-2"

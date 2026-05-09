@@ -46,9 +46,16 @@ fn run_full_app() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            // Initialize app state
+            // Initialize app state. Pull persisted Settings from disk
+            // so the AppState boots with the user's last-known values
+            // — frontend caches sync from this on first
+            // `get_settings` call. First launch / corrupt file →
+            // graceful fallback to `Settings::default()` (logged).
             let state = AppState::new();
+            let persisted = crate::state::Settings::load_from_disk(app.handle());
+            state.update_settings(|s| *s = persisted);
             app.manage(state);
 
             // Setup global shortcut
@@ -95,6 +102,17 @@ fn run_full_app() {
             commands::check_system_health,
             commands::get_gpu_status,
             commands::load_whisper_model_with_options,
+            commands::list_all_models,
+            commands::validate_custom_model,
+            commands::add_custom_model,
+            commands::remove_custom_model,
+            commands::set_model_disabled,
+            commands::get_settings,
+            commands::set_auto_copy,
+            commands::set_vulkan_warning_dismissed,
+            commands::set_welcome_dismissed,
+            commands::add_history_entry,
+            commands::clear_history,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

@@ -266,31 +266,22 @@ fn is_vulkan_available() -> bool {
 /// Public function to check Vulkan availability at application startup.
 /// This is called BEFORE Tauri initialization to decide whether to show
 /// the Vulkan warning window or proceed with normal app launch.
-#[cfg(all(
-    feature = "gpu-vulkan",
-    any(target_os = "windows", target_os = "linux")
-))]
+///
+/// macOS doesn't have this gate — Metal is always available — so the
+/// function (and its re-export in `whisper/mod.rs`) is intentionally
+/// only defined on Windows/Linux. The single call site in `lib.rs` is
+/// gated the same way; keeping the symbol macOS-absent stops clippy
+/// from flagging it as dead code on that platform.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 pub fn is_vulkan_available_at_startup() -> bool {
-    // Perform the full Vulkan check
-    is_vulkan_available()
-}
-
-/// On macOS, Metal is always available (built-in), so we return true.
-#[cfg(target_os = "macos")]
-pub fn is_vulkan_available_at_startup() -> bool {
-    true
-}
-
-/// Fallback for other platforms or when gpu-vulkan feature is disabled.
-#[cfg(not(any(
-    target_os = "macos",
-    all(
-        feature = "gpu-vulkan",
-        any(target_os = "windows", target_os = "linux")
-    )
-)))]
-pub fn is_vulkan_available_at_startup() -> bool {
-    false
+    #[cfg(feature = "gpu-vulkan")]
+    {
+        is_vulkan_available()
+    }
+    #[cfg(not(feature = "gpu-vulkan"))]
+    {
+        false
+    }
 }
 
 /// Information about GPU support in this build

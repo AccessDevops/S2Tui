@@ -17,6 +17,7 @@
     "clipboard-manager:allow-read-text",
     "store:default",
     "process:allow-restart",
-    "process:allow-exit"
+    "process:allow-exit",
+    "dialog:default"
   ]
 }

@@ -6,7 +6,12 @@ import {
 } from "../utils/languages";
 
 export type AppStatus = "idle" | "listening" | "processing" | "error";
-export type ModelId = "small" | "large-v3-turbo";
+// `ModelId` was a closed union in v0.1.7 (only the two built-ins).
+// Custom user-imported models use uuid-v4 ids so the type widens to
+// `string`. The two built-in literals "small" / "large-v3-turbo" are
+// still valid `ModelId` values; consumers that branch on them
+// (welcome window, cycle shortcuts) continue to work unchanged.
+export type ModelId = string;
 // `Language` used to be a 14-entry union; it's now any ISO 639-1 string
 // the registry in `utils/languages.ts` accepts. Validation lives in Rust
 // (`Language::is_known`) and in the registry — TS just keeps it loose.
@@ -41,20 +46,48 @@ export interface GpuStatus {
   fallbackUsed: boolean;
 }
 
+/** Capabilities derived from a model's GGML header. Mirrors the Rust
+ *  `ModelCapabilities` struct exposed by `whisper::compat`. */
+export interface ModelCapabilities {
+  isMultilingual: boolean;
+  sizeClass: string;
+  quantLabel: string;
+  nVocab: number;
+  nAudioState: number;
+  nAudioLayer: number;
+  fileSizeBytes: number;
+}
+
 export interface ModelInfo {
   id: ModelId;
   name: string;
   /** Human-friendly size shown in the picker, e.g. "190 MB". */
   size: string;
-  /** Same value as the Rust `MODEL_REGISTRY.size_bytes` for this id. Used to
-   *  rank models by capacity (proxy: the larger the .bin, the more capable
-   *  the Whisper checkpoint) when language-first cycling needs to auto-pick
-   *  a compatible model. Will become dynamic once custom models ship. */
+  /** Bytes from `capabilities.fileSizeBytes`. Used to rank models by
+   *  capacity (proxy: the larger the .bin, the more capable the
+   *  Whisper checkpoint) when language-first cycling needs to
+   *  auto-pick a compatible model. */
   sizeBytes: number;
   downloaded: boolean;
   downloading: boolean;
   progress: number;
   bundled: boolean;
+  /** `"builtin"` for the two registry models; `"custom"` for
+   *  user-imported entries. Drives row-level UI (Delete icon only on
+   *  custom, etc.). */
+  kind: "builtin" | "custom";
+  /** True when the user has marked this model as disabled. Cycle
+   *  shortcuts skip it; the row renders muted. */
+  disabled: boolean;
+  /** Transient flag: the model failed to load this session. Cleared
+   *  on app restart or via the Retry button. */
+  broken: boolean;
+  /** Reason returned by the backend when the load failed. */
+  brokenReason?: string;
+  /** Absolute path on disk for custom models. Built-ins resolve their
+   *  path internally via `get_models_dir`. */
+  path?: string;
+  capabilities: ModelCapabilities;
 }
 
 /** Two-state behaviour switch for the language cycle shortcut.
@@ -64,6 +97,16 @@ export interface ModelInfo {
  *    most capable compatible model when the current one can't transcribe
  *    the next language. */
 export type LanguageCycleMode = "model-first" | "language-first";
+
+/** Persisted shape of a user-imported Whisper model (Settings → Models
+ *  Add flow). Mirrors the Rust `UserModel` struct. */
+export interface UserModel {
+  id: string;
+  displayName: string;
+  path: string;
+  addedAt: number;
+  capabilities: ModelCapabilities;
+}
 
 export interface Settings {
   language: Language;
@@ -80,6 +123,12 @@ export interface Settings {
   modelLanguages: Record<string, Language[]>;
   /** Behaviour of the language cycle shortcut. See `LanguageCycleMode`. */
   languageCycleMode: LanguageCycleMode;
+  /** User-imported Whisper models (in addition to the two built-ins).
+   *  Empty for users who only use the bundled small / large-v3-turbo. */
+  userModels: UserModel[];
+  /** Model ids (built-in or custom) the user has marked as disabled.
+   *  Disabled models are skipped by the cycle shortcuts. */
+  disabledModels: string[];
 }
 
 // Re-exports kept for backward compat with components that already import
@@ -127,6 +176,8 @@ export const useAppStore = defineStore("app", () => {
     favoriteLanguages: [...ALL_LANGUAGES],
     modelLanguages: {},
     languageCycleMode: "model-first",
+    userModels: [],
+    disabledModels: [],
   });
 
   // Toast shown above the mic button after a language/model toggle.
@@ -222,11 +273,12 @@ export const useAppStore = defineStore("app", () => {
     return Math.round((Math.min(done, total) / total) * 100);
   });
 
-  // Bundled models only
-  const models = ref<ModelInfo[]>([
-    { id: "small", name: "Small (Fast)", size: "190 MB", sizeBytes: 190085487, downloaded: true, downloading: false, progress: 100, bundled: false },
-    { id: "large-v3-turbo", name: "Large V3 Turbo (Best)", size: "547 MB", sizeBytes: 601463531, downloaded: true, downloading: false, progress: 100, bundled: false },
-  ]);
+  // Models slice — seeded from the backend `list_all_models` command
+  // on app boot (see `useTauri.ts initApp`). Starts empty so a window
+  // that runs before init doesn't show stale built-in entries.
+  // After init, contains the merged built-in + user-imported list
+  // with capabilities, disabled state, etc.
+  const models = ref<ModelInfo[]>([]);
 
   const history = ref<HistoryEntry[]>([]);
   const MAX_HISTORY = 20;
@@ -323,6 +375,43 @@ export const useAppStore = defineStore("app", () => {
     if (model) {
       model.downloaded = downloaded;
       model.progress = downloaded ? 100 : 0;
+    }
+  }
+
+  /** Replace the whole models list with the merged backend response.
+   *  Called once on app boot (after `list_all_models`) and again
+   *  whenever the import/disable/delete flows mutate the user-models
+   *  list — both windows re-fetch via the existing `settings:updated`
+   *  event so they stay in sync. */
+  function setModels(list: ModelInfo[]) {
+    models.value = list;
+  }
+
+  /** Toggle the disabled flag on a model id (built-in or custom).
+   *  Optimistic local update; the matching backend command persists
+   *  and broadcasts. */
+  function setModelDisabledLocal(modelId: ModelId, disabled: boolean) {
+    const model = models.value.find((m) => m.id === modelId);
+    if (model) model.disabled = disabled;
+  }
+
+  /** Mark a model as broken with a reason — used by the runtime
+   *  load-failure handler in `useTauri.loadWhisperModel`. */
+  function markModelBroken(modelId: ModelId, reason: string) {
+    const model = models.value.find((m) => m.id === modelId);
+    if (model) {
+      model.broken = true;
+      model.brokenReason = reason;
+    }
+  }
+
+  /** Clear the transient broken flag (used by the row-level Retry
+   *  button before re-attempting the load). */
+  function clearModelBroken(modelId: ModelId) {
+    const model = models.value.find((m) => m.id === modelId);
+    if (model) {
+      model.broken = false;
+      model.brokenReason = undefined;
     }
   }
 
@@ -479,6 +568,10 @@ export const useAppStore = defineStore("app", () => {
     updateSettings,
     updateModelProgress,
     setModelDownloaded,
+    setModels,
+    setModelDisabledLocal,
+    markModelBroken,
+    clearModelBroken,
     setPermissions,
     addToHistory,
     setHistory,

@@ -120,6 +120,50 @@ curl -L -o src-tauri/models/ggml-small.bin \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin
 ```
 
+## Persisted state — backend is the single source of truth
+
+Every value that survives a restart (`Settings` fields + `history`)
+is owned by the **Rust backend**. The frontend Pinia stores are
+caches that re-hydrate from backend on a single broadcast event.
+
+### How to add a new persisted field
+
+1. Add the field to `Settings` in `src-tauri/src/state.rs` with
+   `#[serde(default)]` so existing settings.json files still load.
+2. Add a `#[tauri::command] pub fn set_X(value, state, app: AppHandle)
+   -> Result<(), String>` in `src-tauri/src/commands.rs`. End with
+   `persist_and_broadcast(&state, &app)?;` — that one call writes
+   `settings.json` AND emits `settings:changed`. Register the
+   command in `src-tauri/src/lib.rs`.
+3. Add the matching field on the TypeScript `Settings` interface in
+   `src/stores/appStore.ts` and its mirror on `PersistedSettings`
+   in `src/composables/useStore.ts`.
+4. Wire the field into `useSettingsSync.refresh()` so it updates the
+   Pinia cache on every `settings:changed` event.
+
+That's the whole list. The cross-window sync handles itself — every
+window listens to `settings:changed` once via `useSettingsSync` and
+re-fetches the canonical Settings via `get_settings`.
+
+### Rules to keep the discipline
+
+- **Never** import from `@tauri-apps/plugin-store` in any `.ts`
+  / `.vue` file. The JS plugin is gone from our app code; any
+  reintroduction is a regression. `git grep "@tauri-apps/plugin-store"
+  src/` should return zero hits.
+- **Never** read or write settings.json directly from JS. All reads
+  go through `invoke('get_settings')` (or the `loadSettings`
+  helper that wraps it). All writes go through a Tauri setter
+  command.
+- **Never** add a per-slice listener for `settings:changed`. The
+  event is global; one `useSettingsSync` per window is enough.
+  Adding more listeners increases the chance of double-fetch
+  thrashing without giving anything back.
+- **Atomic mutators only**. A setter command must finish its
+  in-memory mutation, persist to disk, and emit the broadcast all
+  before returning. The pattern is encoded in
+  `persist_and_broadcast` — use it, don't re-implement it.
+
 ## Platform Requirements
 
 ### Windows

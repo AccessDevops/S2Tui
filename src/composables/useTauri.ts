@@ -4,13 +4,16 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   useAppStore,
   type ModelId,
+  type ModelInfo,
   type Language,
   type SystemHealth,
   type GpuStatus,
+  type ModelCapabilities,
   LANGUAGE_DISPLAY_NAMES,
 } from "../stores/appStore";
-import { loadSettings, saveSettings, addHistoryEntry, loadHistory } from "./useStore";
+import { loadSettings, addHistoryEntry, loadHistory } from "./useStore";
 import { useModelDownloadTracker } from "./useModelDownloadTracker";
+import { useSettingsSync } from "./useSettingsSync";
 
 // Platform-aware settings window opener
 export async function openSettings() {
@@ -74,18 +77,6 @@ interface TranscriptPayload {
 export function useTauri() {
   const store = useAppStore();
 
-  // Each Tauri window owns its own Pinia store, so a setter that mutates
-  // settings in one window does not reach the other. Broadcast a Tauri event
-  // and have every window reload from persistence — same pattern we already
-  // use for `history:updated`.
-  async function broadcastSettingsUpdate(): Promise<void> {
-    try {
-      await emit("settings:updated", null);
-    } catch (err) {
-      console.error("Failed to broadcast settings update:", err);
-    }
-  }
-
   // Commands - Audio
   async function startListen(mode: ListenMode = "toggle") {
     try {
@@ -113,18 +104,19 @@ export function useTauri() {
   }
 
   // Commands - Settings.
-  // Order matters: persist to disk BEFORE broadcasting `settings:updated`.
-  // The cross-window listener reads `loadSettings()` from disk, so if we
-  // broadcast first the listener would see the previous on-disk value and
-  // overwrite the in-memory store with stale state. This race manifested
-  // as the language toggle "needing two presses" because every other press
-  // was instantly reverted by our own broadcast handler.
+  //
+  // Each wrapper now does the bare minimum: invoke the backend command,
+  // optimistically update the local Pinia cache for snappiness, return.
+  //
+  // The Rust setter is responsible for persisting `settings.json`
+  // atomically (via `Settings::persist`) and emitting `settings:changed`
+  // so every window's `useSettingsSync` re-fetches the canonical state.
+  // The previous JS-side `saveSettings()` + `broadcastSettingsUpdate()`
+  // dance is gone — backend is the single source of truth.
   async function setModel(name: ModelId) {
     try {
       await invoke("set_model", { name });
       store.updateSettings({ model: name });
-      await saveSettings({ model: name });
-      await broadcastSettingsUpdate();
     } catch (error) {
       console.error("Failed to set model:", error);
     }
@@ -134,8 +126,6 @@ export function useTauri() {
     try {
       await invoke("set_language", { lang });
       store.updateSettings({ language: lang });
-      await saveSettings({ language: lang });
-      await broadcastSettingsUpdate();
     } catch (error) {
       console.error("Failed to set language:", error);
     }
@@ -145,8 +135,6 @@ export function useTauri() {
     try {
       await invoke("set_shortcut", { shortcut });
       store.updateSettings({ shortcut });
-      await saveSettings({ shortcut });
-      await broadcastSettingsUpdate();
     } catch (error) {
       console.error("Failed to set shortcut:", error);
       throw error;
@@ -157,8 +145,6 @@ export function useTauri() {
     try {
       await invoke("set_language_toggle_shortcut", { shortcut });
       store.updateSettings({ languageToggleShortcut: shortcut });
-      await saveSettings({ languageToggleShortcut: shortcut });
-      await broadcastSettingsUpdate();
     } catch (error) {
       console.error("Failed to set language toggle shortcut:", error);
       throw error;
@@ -169,8 +155,6 @@ export function useTauri() {
     try {
       await invoke("set_model_toggle_shortcut", { shortcut });
       store.updateSettings({ modelToggleShortcut: shortcut });
-      await saveSettings({ modelToggleShortcut: shortcut });
-      await broadcastSettingsUpdate();
     } catch (error) {
       console.error("Failed to set model toggle shortcut:", error);
       throw error;
@@ -186,8 +170,6 @@ export function useTauri() {
     try {
       await invoke("set_favorite_languages", { languages: next });
       store.updateSettings({ favoriteLanguages: next });
-      await saveSettings({ favoriteLanguages: next });
-      await broadcastSettingsUpdate();
     } catch (error) {
       console.error("Failed to set favorite languages:", error);
       throw error;
@@ -199,8 +181,6 @@ export function useTauri() {
       await invoke("set_model_languages", { model, languages });
       const next = { ...store.settings.modelLanguages, [model]: languages };
       store.updateSettings({ modelLanguages: next });
-      await saveSettings({ modelLanguages: next });
-      await broadcastSettingsUpdate();
     } catch (error) {
       console.error("Failed to set model languages:", error);
       throw error;
@@ -213,8 +193,6 @@ export function useTauri() {
     try {
       await invoke("set_language_cycle_mode", { mode });
       store.updateSettings({ languageCycleMode: mode });
-      await saveSettings({ languageCycleMode: mode });
-      await broadcastSettingsUpdate();
     } catch (error) {
       console.error("Failed to set language cycle mode:", error);
       throw error;
@@ -225,10 +203,19 @@ export function useTauri() {
   async function loadWhisperModel(model: ModelId) {
     try {
       await invoke("load_whisper_model", { model });
+      // Successful load — clear any prior broken flag for this id.
+      // Backend persists + emits settings:changed, frontend cache
+      // catches up via the unified resync.
+      store.clearModelBroken(model);
       store.updateSettings({ model });
-      await saveSettings({ model });
-      await broadcastSettingsUpdate();
     } catch (error) {
+      // Runtime safety net: mark the model "broken" locally so cycle
+      // shortcuts skip it (Step 7 filter) and the row UI surfaces a
+      // Retry button (Step 6). The reason text comes straight from
+      // whisper-rs / our backend wrapper. Cleared on next successful
+      // load or by app restart (broken state isn't persisted).
+      const reason = error instanceof Error ? error.message : String(error);
+      store.markModelBroken(model, reason);
       console.error("Failed to load whisper model:", error);
       throw error;
     }
@@ -278,6 +265,115 @@ export function useTauri() {
     }
   }
 
+  // ---- Custom model registry --------------------------------------------
+  // Mirrors the Rust `ModelInfoResponse` returned by `list_all_models`.
+  // Field names match the Rust serde `rename_all = "camelCase"` output.
+  interface ModelInfoResponse {
+    id: string;
+    displayName: string;
+    kind: "builtin" | "custom";
+    capabilities: ModelCapabilities;
+    disabled: boolean;
+    broken: boolean;
+    path?: string;
+    url?: string;
+    filename?: string;
+    present: boolean;
+  }
+
+  /** Format a byte count as a human-friendly MB/GB string. Mirrors the
+   *  rendering used in Settings → Models rows so the seed matches the
+   *  hand-written entries it replaced. */
+  function formatBytes(n: number): string {
+    if (n <= 0) return "0 MB";
+    const mb = n / (1024 * 1024);
+    if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
+    return `${Math.round(mb)} MB`;
+  }
+
+  /** Translate a backend `ModelInfoResponse` into the frontend
+   *  `ModelInfo` shape used by the store. Pure mapping, no side
+   *  effects. */
+  function toModelInfo(r: ModelInfoResponse): ModelInfo {
+    return {
+      id: r.id,
+      name: r.displayName,
+      size: formatBytes(r.capabilities.fileSizeBytes),
+      sizeBytes: r.capabilities.fileSizeBytes,
+      downloaded: r.present,
+      downloading: false,
+      progress: r.present ? 100 : 0,
+      bundled: false,
+      kind: r.kind,
+      disabled: r.disabled,
+      broken: r.broken,
+      path: r.path,
+      capabilities: r.capabilities,
+    };
+  }
+
+  /** Fetch the merged built-in + user-imported model list from the
+   *  backend and seed the Pinia `models` slice. Called once on app
+   *  boot, and again whenever `settings:updated` fires (so the
+   *  Settings window reflects an import done in the main window). */
+  async function refreshModelList(): Promise<void> {
+    try {
+      const list = await invoke<ModelInfoResponse[]>("list_all_models");
+      store.setModels(list.map(toModelInfo));
+    } catch (error) {
+      console.error("Failed to list models:", error);
+    }
+  }
+
+  /** Run the file-format validator on a candidate path. Resolves
+   *  with the validation result, rejects with a structured
+   *  ModelCompatError-shaped object the dialog can switch on by
+   *  `kind`. */
+  async function validateCustomModel(path: string): Promise<unknown> {
+    return invoke("validate_custom_model", { path });
+  }
+
+  /** Persist a freshly-validated model. Returns the backend's
+   *  `UserModel` payload (with the assigned UUID + capabilities)
+   *  so the caller can append it to the local persisted list and
+   *  trigger the cross-window broadcast. */
+  interface BackendUserModel {
+    id: string;
+    displayName: string;
+    path: string;
+    addedAt: number;
+    capabilities: ModelCapabilities;
+  }
+  async function addCustomModel(name: string, path: string): Promise<BackendUserModel> {
+    const created = await invoke<BackendUserModel>("add_custom_model", { name, path });
+    // Backend already persisted + emitted settings:changed. We just
+    // re-seed the local model list so the new row is visible
+    // immediately without waiting for the event round-trip.
+    await refreshModelList();
+    return created;
+  }
+
+  /** Remove a user-imported model. Backend handles the auto-switch
+   *  to first-available if the deleted model was active. Returns
+   *  the new active model id (or null if no switch was needed). */
+  async function removeCustomModel(id: string): Promise<string | null> {
+    const newActive = await invoke<string | null>("remove_custom_model", { id });
+    // Same as addCustomModel: backend persisted + emitted; we just
+    // refresh the local list and update the active-model pointer
+    // optimistically.
+    await refreshModelList();
+    if (newActive) {
+      store.updateSettings({ model: newActive as ModelId });
+    }
+    return newActive;
+  }
+
+  /** Toggle the disabled flag on a model id (built-in or custom). */
+  async function setModelDisabled(id: string, disabled: boolean): Promise<void> {
+    await invoke("set_model_disabled", { id, disabled });
+    store.setModelDisabledLocal(id, disabled);
+  }
+
   // Commands - System Health
   async function checkSystemHealth(): Promise<SystemHealth> {
     try {
@@ -322,13 +418,16 @@ export function useTauri() {
         fallbackUsed: result.fallbackUsed,
       });
 
-      // Update settings
+      // Successful load — clear any broken flag. Backend persists
+      // settings.model + emits settings:changed; we just keep the
+      // local cache optimistically up-to-date.
+      store.clearModelBroken(model);
       store.updateSettings({ model });
-      await saveSettings({ model });
-      await broadcastSettingsUpdate();
 
       return result;
     } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      store.markModelBroken(model, reason);
       console.error("Failed to load whisper model with options:", error);
       throw error;
     }
@@ -392,18 +491,18 @@ export function useTauri() {
         // System health check failed, continue without GPU info
       }
 
-      // Detect actually available models on disk (not just persisted state)
+      // Seed the models slice from the backend's merged built-in +
+      // user-imported list. This replaces the v0.1.7 hardcoded init
+      // (two ModelInfo entries hardcoded in the store) — the source
+      // of truth now lives in Rust's `MODEL_REGISTRY` + persisted
+      // `userModels`. The `present` flag returned by the backend
+      // doubles as our `downloaded` boolean.
+      await refreshModelList();
+
+      // For now we still call `getAvailableModels` because downstream
+      // welcome/init logic uses it to decide whether the welcome
+      // dialog should run. Cheap, no harm.
       let availableModels = await getAvailableModels();
-
-      // Reset all models to not downloaded first
-      for (const model of store.models) {
-        store.setModelDownloaded(model.id, false);
-      }
-
-      // Mark only actually available models as downloaded
-      for (const modelId of availableModels) {
-        store.setModelDownloaded(modelId as ModelId, true);
-      }
 
       // Load history
       const history = await loadHistory();
@@ -590,11 +689,13 @@ export function useTauri() {
     // which the Settings window also calls — see SettingsPage.vue.
     await useModelDownloadTracker().attach();
 
-    // Vulkan warning dismissed event (from vulkan warning window)
+    // Vulkan warning dismissed event (from vulkan warning window).
+    // The backend `set_vulkan_warning_dismissed` command handles
+    // both persistence and the cross-window broadcast atomically.
     unlistenFns.push(await listen<{ permanent: boolean }>("vulkan-warning:dismissed", async (event) => {
       if (event.payload.permanent) {
         store.setVulkanWarningDismissed(true);
-        await saveSettings({ vulkanWarningDismissed: true });
+        await invoke("set_vulkan_warning_dismissed", { dismissed: true });
       }
     }));
 
@@ -608,11 +709,12 @@ export function useTauri() {
       }
     }));
 
-    // Welcome dismissed event (from welcome window)
+    // Welcome dismissed event (from welcome window). Same atomic
+    // backend pattern as the vulkan-warning case above.
     unlistenFns.push(await listen<{ permanent: boolean }>("welcome:dismissed", async (event) => {
       if (event.payload.permanent) {
         store.setWelcomeDismissed(true);
-        await saveSettings({ welcomeDismissed: true });
+        await invoke("set_welcome_dismissed", { dismissed: true });
       }
     }));
 
@@ -621,30 +723,14 @@ export function useTauri() {
       openSettings();
     }));
 
-    // Cross-window settings sync. Whichever window mutates settings (Settings
-    // window editing favorites, main window cycling via toggle shortcut, …)
-    // emits `settings:updated`; every window reloads from persistence so its
-    // local Pinia store no longer drifts. Without this, the toggle listeners
-    // below would read stale `favoriteLanguages` and cycle through 14 entries
-    // instead of the 2 the user picked in Settings.
-    unlistenFns.push(await listen("settings:updated", async () => {
-      try {
-        const persisted = await loadSettings();
-        store.updateSettings({
-          language: persisted.language,
-          model: persisted.model,
-          autoCopy: persisted.autoCopy,
-          shortcut: persisted.shortcut,
-          languageToggleShortcut: persisted.languageToggleShortcut ?? "",
-          modelToggleShortcut: persisted.modelToggleShortcut ?? "",
-          favoriteLanguages: persisted.favoriteLanguages ?? store.settings.favoriteLanguages,
-          modelLanguages: persisted.modelLanguages ?? {},
-          languageCycleMode: persisted.languageCycleMode ?? "model-first",
-        });
-      } catch (err) {
-        console.error("Failed to reload settings on settings:updated event:", err);
-      }
-    }));
+    // Cross-window settings sync. Backend = single source of truth:
+    // every Rust setter command persists settings.json + emits
+    // `settings:changed`. The `useSettingsSync` composable listens
+    // for that event once, re-fetches the canonical Settings via
+    // `get_settings`, and updates every Pinia slice that mirrors
+    // persisted state. New persisted fields require zero changes
+    // here — they're picked up by `get_settings` automatically.
+    unlistenFns.push(await useSettingsSync().attach());
 
     // Drop the parenthetical descriptor from a model display name (e.g.
     // "Large V3 Turbo (Best)" -> "Large V3 Turbo") so the toast inside the
@@ -682,7 +768,12 @@ export function useTauri() {
 
       if (mode === "language-first") {
         // ============ MODE: LANGUAGE-FIRST ============================
-        const downloaded = store.models.filter((m) => m.downloaded);
+        // Filter out disabled (user-excluded from cycle) and broken
+        // (failed to load this session) models. Built-ins and customs
+        // get the same treatment per the locked-in UX answer.
+        const downloaded = store.models.filter(
+          (m) => m.downloaded && !m.disabled && !m.broken,
+        );
         if (downloaded.length === 0) {
           store.showToggleNotification("No model");
           return;
@@ -795,7 +886,11 @@ export function useTauri() {
 
       if (store.status !== "idle") return;
 
-      const downloaded = store.models.filter((m) => m.downloaded);
+      // Same filter chain as the language-first branch above. Disabled
+      // and broken models stay out of the cycle uniformly.
+      const downloaded = store.models.filter(
+        (m) => m.downloaded && !m.disabled && !m.broken,
+      );
       if (downloaded.length < 2) {
         store.showToggleNotification(
           downloaded.length === 0 ? "No model" : "Only 1 model",
@@ -890,6 +985,11 @@ export function useTauri() {
     loadWhisperModelWithOptions,
     isModelLoaded,
     getAvailableModels,
+    refreshModelList,
+    validateCustomModel,
+    addCustomModel,
+    removeCustomModel,
+    setModelDisabled,
     // System Health
     checkSystemHealth,
     getGpuStatus,

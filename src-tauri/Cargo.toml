@@ -26,6 +26,7 @@ tauri-plugin-clipboard-manager = "2"
 tauri-plugin-store = "2"
 tauri-plugin-os = "2"
 tauri-plugin-process = "2"
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -40,12 +41,25 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 # SHA-256 of downloaded models against a hash hard-coded in MODEL_REGISTRY.
 sha2 = "0.10"
+# UUID v4 for user-imported model ids. We don't derive ids from the
+# file path so renaming/moving the file post-import doesn't break
+# references; the id stays stable across the app lifetime.
+uuid = { version = "1", features = ["v4", "serde"] }
+# Memory pre-flight at custom-model import time: warn the user when
+# the model file is too large vs available RAM. Cross-platform; the
+# default feature set is fine (we only need `available_memory`).
+sysinfo = "0.30"
 
 # Audio capture
 cpal = "0.15"
 
 # Random for mock/testing
 rand = "0.8"
+
+[dev-dependencies]
+# Used by the custom-model validator's unit tests to write fixture
+# `.bin` files (with crafted magic + hparams) to a temp dir.
+tempfile = "3"
 
 # Windows dependencies
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -60,13 +74,13 @@ ash = "0.38"  # Vulkan bindings for runtime GPU detection
 
 # Windows/Linux: whisper-rs with configurable GPU support
 [target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies.whisper-rs]
-version = "0.13"
+version = "0.16"
 default-features = false
 # Features are controlled by Cargo features (gpu-vulkan adds vulkan)
 
 # macOS: Whisper with Metal (optimal for Apple Silicon and Intel Macs)
 [target.'cfg(target_os = "macos")'.dependencies]
-whisper-rs = { version = "0.13", default-features = false, features = ["metal"] }
+whisper-rs = { version = "0.16", default-features = false, features = ["metal"] }
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSURL", "NSArray"] }
 objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication", "NSWindow", "NSResponder", "NSView"] }

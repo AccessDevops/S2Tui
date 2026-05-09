@@ -256,11 +256,22 @@ impl WhisperEngine {
 
         // Anti-hallucination tuning. Whisper is known to insert plausible but
         // unspoken words on silence or low-energy audio. Deterministic decoding
-        // and a no-speech threshold reduce that significantly.
+        // and the various filters below reduce that significantly.
         params.set_temperature(0.0);
         params.set_temperature_inc(0.0);
+        // NOTE: `set_no_speech_thold` is documented upstream as "Currently
+        // (as of v1.3.0) not implemented" — it's a no-op at the engine
+        // level. Kept here defensively so we don't silently break if/when
+        // upstream wires it back on. The actual no-speech filtering for us
+        // happens post-decode via `segment.no_speech_probability()` below.
         params.set_no_speech_thold(0.6);
         params.set_suppress_blank(true);
+        // Drop bracketed/parenthesised non-speech tokens like [Music],
+        // [Applause], (typing), (sigh) that whisper inherits from its
+        // subtitle/podcast training data. Useless noise for a dictation
+        // tool — users would otherwise have to delete them by hand.
+        // See https://github.com/openai/whisper/blob/7858aa9c08d98f75575035ecd6481f462d66ca27/whisper/tokenizer.py#L224-L253
+        params.set_suppress_nst(true);
 
         // Create a new state for this transcription
         let mut state = ctx.create_state().map_err(|e| {
@@ -272,16 +283,36 @@ impl WhisperEngine {
             WhisperError::TranscriptionError(format!("Transcription failed: {}", e))
         })?;
 
-        // Get the transcription result
-        let num_segments = state.full_n_segments().map_err(|e| {
-            WhisperError::TranscriptionError(format!("Failed to get segments: {}", e))
-        })?;
+        // Get the transcription result. whisper-rs 0.16 reshuffled the
+        // segment API: `full_n_segments()` now returns i32 directly (no
+        // Result), and `full_get_segment_text(i)` was replaced by
+        // `get_segment(i)` returning `Option<WhisperSegment>`, with text
+        // accessed via `.to_str()`.
+        let num_segments = state.full_n_segments();
+
+        // Threshold for the post-decode no-speech filter. Aligned with
+        // whisper.cpp's own `no_speech_thold` default (0.6) so if upstream
+        // ever implements the in-engine path the two layers won't disagree.
+        // Field-tunable: bump to 0.7 if we observe legitimate quiet speech
+        // getting dropped; never below 0.5 (too permissive, lets ghosts
+        // through).
+        const NO_SPEECH_THRESHOLD: f32 = 0.6;
 
         let mut result = String::new();
         for i in 0..num_segments {
-            if let Ok(segment) = state.full_get_segment_text(i) {
-                result.push_str(&segment);
-                result.push(' ');
+            if let Some(segment) = state.get_segment(i) {
+                let no_speech_prob = segment.no_speech_probability();
+                if no_speech_prob > NO_SPEECH_THRESHOLD {
+                    tracing::debug!(
+                        "Dropping segment {i} as non-speech (p={:.2})",
+                        no_speech_prob
+                    );
+                    continue;
+                }
+                if let Ok(text) = segment.to_str() {
+                    result.push_str(text);
+                    result.push(' ');
+                }
             }
         }
 
