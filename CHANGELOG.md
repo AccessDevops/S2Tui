@@ -7,13 +7,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-05-09
+
 ### Added
-- AppImage bundle for the Linux release
-  (`S2Tui_<version>_amd64.AppImage`). Single file that runs on Arch,
-  Fedora, Debian, Ubuntu and any distro with glibc ≥ 2.35 — no manual
-  dependency install required, just `chmod +x` and run. Closes the gap
-  for users on distros not covered by the existing `.deb`/`.rpm`
-  artifacts.
+- **Custom Whisper model import.** Settings → Whisper Models now has
+  an `Add` button that opens a native file picker. The selected
+  `.bin` is validated against Whisper's architectural invariants
+  (magic bytes, n_audio_ctx, n_text_ctx, n_mels, vocab range,
+  quantisation type — all checked from the first 48 bytes of the
+  file, < 1 ms wall time) and imported with a user-chosen display
+  name. Built-in and user-imported models share the same row UI.
+- **Per-model Disable / Delete actions** on every row. Disable
+  removes the model from the cycle shortcut while keeping it
+  manually selectable; Delete removes a custom-model entry from
+  the imported list (the file on disk is preserved). Built-in
+  models cannot be deleted but can be disabled.
+- **Auto-detection of English-only model variants** (`.en` files,
+  `n_vocab=51864`). Their per-model language whitelist is
+  pre-populated with `["auto", "en"]` so the cycle shortcut and
+  the chip picker treat non-English languages as not allowed for
+  the model. Row carries an "EN only" pill.
+- **Runtime broken-model detection.** A model that fails to load
+  is marked broken in-session, surfaces a red pill and a Retry
+  button on its row, and is skipped by the cycle shortcuts —
+  instead of crashing the worker.
+- **Memory pre-flight at import time.** The validator emits a
+  soft `HighMemoryUse` warning when the candidate model file
+  exceeds 60% of available RAM, so users on tight machines see
+  the trade-off before they import.
+- **Anti-hallucination knobs** — `set_suppress_nst(true)` drops
+  bracketed/parenthesised non-speech tokens (`[Music]`,
+  `[Applause]`, `(typing)`, sigh tokens) inherited from Whisper's
+  subtitle/podcast training data. Per-segment
+  `no_speech_probability > 0.6` post-decode filter catches the
+  residual ghost text Whisper invents on silent audio tails.
+- **AppImage bundle for the Linux release**
+  (`S2Tui_<version>_amd64.AppImage`). Single file that runs on
+  Arch, Fedora, Debian, Ubuntu and any distro with glibc ≥ 2.35
+  — no manual dependency install required, just `chmod +x` and
+  run.
+
+### Changed
+- **Upgrade `whisper-rs` 0.13.2 → 0.16.0** (`whisper-rs-sys` 0.11.1
+  → 0.15.0). Pulls in upstream whisper.cpp anti-hallucination
+  fix (PR #2629), faster Metal kernels, support for newer
+  quantisation variants (q4_K, q5_K, q6_K, IQ family). Public API
+  surface for our usage is unchanged; the segment-collection
+  loop adapts to the renamed `state.get_segment(i)` accessor.
+- **Backend = single source of truth for persisted state.**
+  `settings.json` is now read and written exclusively from Rust
+  (via `Settings::persist` + `tauri-plugin-store`'s `StoreExt`).
+  Every Tauri setter command persists atomically and emits a
+  `settings:changed` event; every window listens once via the
+  new `useSettingsSync` composable and re-fetches the canonical
+  state. Eliminates the recurring "I forgot to refresh slice X
+  in window Y" desync bug class. Documented as a convention in
+  `CLAUDE.md`.
+- **Tauri 2.9 → 2.11** to align Rust crates with the
+  `@tauri-apps/api` 2.11 JS package.
+- **Whisper.cpp upgrade enables the v3 model invariant**
+  (`n_mels=128` for large-v3 / large-v3-turbo / distil-large-v3).
+  The compatibility validator accepts both 80 and 128.
+- **Quantisation-version-encoded ftype decoded properly.**
+  whisper.cpp encodes `raw_ftype = qntvr × 1000 + ftype` on
+  disk; our validator decodes it instead of rejecting real
+  q5_x q5_K models.
+
+### Fixed
+- **Cycle shortcut now sees newly-imported custom models** in the
+  main window without requiring a Settings window close+reopen.
+  Root cause: per-window Pinia stores stayed out of sync because
+  the main window's `settings:updated` listener didn't refresh
+  the `models` slice. Fixed by the Option B refactor (above).
+- **Settings → Whisper Models tab is no longer empty on open.**
+  Same Pinia-per-window root cause; fixed by the same refactor.
+- **Custom-model load no longer fails on UUID-keyed ids.** The
+  backend now resolves model paths via a shared helper
+  (`resolve_model_path`) that consults built-in `MODEL_REGISTRY`
+  first and `Settings.user_models` second, instead of blindly
+  synthesising `<models_dir>/ggml-<id>.bin`.
+- **Compatibility error JSON now exposes hparams in camelCase**
+  to the frontend. `serde(rename_all = "camelCase")` on tagged
+  enums only renames the variant tag, not the inner struct
+  fields; we add `rename_all_fields = "camelCase"` so the
+  details panel actually shows the values it claims to.
+- **Release pipeline `release.yml` Windows job** uses the proper
+  Qt-installer unattended flags (`--accept-licenses`,
+  `--default-answer`, `--confirm-command install`) for the
+  Vulkan SDK installer instead of the legacy NSIS `/S` flag.
+  Adds a 25-minute step timeout so a future installer
+  regression fails fast instead of burning the GitHub default
+  6-hour job timeout.
 
 ## [0.1.7] - 2026-05-07
 
