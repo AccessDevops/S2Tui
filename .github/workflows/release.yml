@@ -191,7 +191,14 @@ jobs:
       - name: Install Windows build tools
         if: matrix.platform.name == 'Windows'
         shell: pwsh
+        # Hard cap so a future installer regression fails fast (~5 min for
+        # ninja + ~10 min for Vulkan SDK is the normal envelope). Without
+        # this, a hang on the Vulkan installer used the GitHub default
+        # 6-hour job timeout — the v0.1.6 and v0.1.7 Windows builds both
+        # burned ~6 h before being cancelled.
+        timeout-minutes: 25
         run: |
+          $ErrorActionPreference = "Stop"
           choco install ninja -y --no-progress
 
           # whisper-cpp's CMake step on Windows needs an explicit generator.
@@ -203,15 +210,37 @@ jobs:
           "CMAKE_GENERATOR=Ninja" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
 
           # Vulkan SDK for whisper-cpp's optional Vulkan backend.
+          # IMPORTANT: LunarG switched to a Qt-based installer in SDK 1.3+,
+          # so the legacy NSIS `/S` silent flag is now ignored — the
+          # installer waits forever for an interactive answer. The proper
+          # unattended flags are `--root`, `--accept-licenses`,
+          # `--default-answer`, `--confirm-command install`. Documented at
+          # https://vulkan.lunarg.com/doc/sdk/latest/windows/getting_started.html
           $vulkanVersion = "1.4.304.0"
-          $vulkanUrl = "https://sdk.lunarg.com/sdk/download/$vulkanVersion/windows/VulkanSDK-$vulkanVersion-Installer.exe"
+          $vulkanPath    = "C:\VulkanSDK\$vulkanVersion"
+          $vulkanUrl     = "https://sdk.lunarg.com/sdk/download/$vulkanVersion/windows/VulkanSDK-$vulkanVersion-Installer.exe"
           $installerPath = "$env:TEMP\VulkanSDK-Installer.exe"
+
+          Write-Host "Downloading Vulkan SDK $vulkanVersion..."
           Invoke-WebRequest -Uri $vulkanUrl -OutFile $installerPath
-          Start-Process -FilePath $installerPath -ArgumentList "/S" -Wait -NoNewWindow
-          $vulkanPath = "C:\VulkanSDK\$vulkanVersion"
-          if (Test-Path $vulkanPath) {
-            "VULKAN_SDK=$vulkanPath" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+
+          Write-Host "Installing Vulkan SDK (unattended Qt install)..."
+          $proc = Start-Process -FilePath $installerPath `
+            -ArgumentList "--root", $vulkanPath, "--accept-licenses", "--default-answer", "--confirm-command", "install" `
+            -Wait -NoNewWindow -PassThru
+          if ($proc.ExitCode -ne 0) {
+            throw "Vulkan SDK installer exited with code $($proc.ExitCode)"
           }
+
+          # Sanity check — fail loud instead of silently skipping the
+          # VULKAN_SDK env export and letting whisper-rs's build.rs emit
+          # the cryptic "Please install Vulkan SDK and ensure that
+          # VULKAN_SDK env variable is set" panic 30 minutes later.
+          if (-not (Test-Path "$vulkanPath\Bin\glslc.exe")) {
+            throw "Vulkan SDK install incomplete — $vulkanPath\Bin\glslc.exe not found"
+          }
+          "VULKAN_SDK=$vulkanPath" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+          Write-Host "Vulkan SDK ready at $vulkanPath"
 
       - name: Install frontend dependencies
         run: npm ci
