@@ -4,6 +4,23 @@
 [target.'cfg(target_os = "macos")']
 rustflags = ["--cfg", "macos_metal"]
 
+# Apple Silicon: allow undefined symbols at link time and resolve them
+# at runtime via dyld. Required because whisper.cpp 0.16 (vendored in
+# whisper-rs-sys 0.15) added a new `ggml-metal-device.m` that uses
+# `@available(macOS …, *)` blocks. These expand to a call to
+# `__isPlatformVersionAtLeast` in compiler-rt. Rust final-links with
+# `-nodefaultlibs`, so compiler-rt isn't auto-pulled and the symbol
+# stays undefined at link time — broke the v0.1.8 release on the
+# aarch64-apple-darwin CI runner (local dev cache often hides this
+# because whisper-rs-sys was previously compiled with an older
+# toolchain). The dynamic_lookup flag tells the linker to defer the
+# resolution to runtime; `__isPlatformVersionAtLeast` is a system
+# symbol exposed by libSystem on macOS 11+, so the late binding is
+# safe. Intel macs aren't affected — different code path in
+# ggml-metal that doesn't use the @available check.
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-undefined,dynamic_lookup"]
+
 # Note: the previous attempt to declare a Windows-only `CMAKE_GENERATOR=Ninja`
 # via `[target.'cfg(target_os = "windows")'.env]` was silently ignored by
 # cargo (cargo doesn't accept `env` as a sub-key under `[target]`). Cargo
